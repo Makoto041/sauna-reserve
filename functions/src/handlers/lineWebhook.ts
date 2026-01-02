@@ -23,6 +23,7 @@ import {
   removeTargetDate,
   clearTargetDates,
   getWatchConfig,
+  getWatchState,
   ensureWatchConfig,
 } from "../lib/index.js";
 
@@ -105,6 +106,26 @@ function formatDatesForDisplay(dates: string[]): string {
   return dates.map(formatDateForDisplay).join("\n");
 }
 
+/**
+ * Parses multiple dates from input (space or comma separated).
+ * Example: "1/2 1/3" or "1/2, 1/3" or "1/2　1/3" (full-width space)
+ * @returns Array of YYYY-MM-DD strings (only valid dates)
+ */
+function parseMultipleDates(input: string): string[] {
+  // Split by space (half-width or full-width) or comma
+  const parts = input.split(/[\s,、　]+/).filter((p) => p.length > 0);
+  const dates: string[] = [];
+
+  for (const part of parts) {
+    const parsed = parseDate(part);
+    if (parsed && !dates.includes(parsed)) {
+      dates.push(parsed);
+    }
+  }
+
+  return dates.sort();
+}
+
 // Define secrets
 const lineChannelAccessToken = defineSecret("LINE_CHANNEL_ACCESS_TOKEN");
 const lineChannelSecret = defineSecret("LINE_CHANNEL_SECRET");
@@ -163,28 +184,45 @@ async function processEvent(
       }
     }
 
-    // Check if it's a date command (add date)
-    const parsedDate = parseDate(rawText);
-    if (parsedDate) {
-      await addTargetDate(parsedDate);
-      const displayDate = formatDateForDisplay(parsedDate);
+    // Check if it's a date command (add date - supports multiple dates)
+    const parsedDates = parseMultipleDates(rawText);
+    if (parsedDates.length > 0) {
+      // Add all dates
+      for (const date of parsedDates) {
+        await addTargetDate(date);
+      }
       const config = await getWatchConfig();
-      const total = config?.targetDates?.length ?? 1;
-      await replyMessage(
-        accessToken,
-        replyToken,
-        `${displayDate} を監視対象に追加しました。\n\n` +
-          `現在の監視日数: ${total}件\n\n` +
-          "「on」で監視開始\n" +
-          "「status」で一覧確認\n" +
-          "「削除 1/15」で日付を削除"
-      );
-      logger.info("Target date added", { userId, targetDate: parsedDate });
+      const total = config?.targetDates?.length ?? parsedDates.length;
+
+      if (parsedDates.length === 1) {
+        const displayDate = formatDateForDisplay(parsedDates[0]);
+        await replyMessage(
+          accessToken,
+          replyToken,
+          `${displayDate} を監視対象に追加しました。\n\n` +
+            `現在の監視日数: ${total}件\n\n` +
+            "「開始」で監視開始\n" +
+            "「状態」で一覧確認\n" +
+            "「削除 1/15」で日付を削除"
+        );
+      } else {
+        const displayDates = parsedDates.map(formatDateForDisplay).join("\n");
+        await replyMessage(
+          accessToken,
+          replyToken,
+          `${parsedDates.length}件の日付を追加しました:\n${displayDates}\n\n` +
+            `現在の監視日数: ${total}件\n\n` +
+            "「開始」で監視開始\n" +
+            "「状態」で一覧確認"
+        );
+      }
+      logger.info("Target dates added", { userId, targetDates: parsedDates });
       return;
     }
 
     switch (text) {
-      case "start": {
+      case "start":
+      case "登録": {
         await setLineTarget(userId);
         await ensureWatchConfig();
         await replyMessage(
@@ -193,16 +231,17 @@ async function processEvent(
           "登録完了しました！\n\n" +
             "日付を送信: 監視日を追加（例: 1/15）\n" +
             "複数日程を追加できます\n" +
-            "「on」で監視開始\n" +
-            "「off」で監視停止\n" +
-            "「status」で状態確認\n" +
+            "「開始」で監視開始\n" +
+            "「停止」で監視停止\n" +
+            "「状態」で状態確認\n" +
             "「使い方」で詳細を表示"
         );
         logger.info("User registered", { userId });
         break;
       }
 
-      case "on": {
+      case "on":
+      case "開始": {
         const config = await getWatchConfig();
         await setWatchEnabled(true);
         const dates = config?.targetDates;
@@ -219,18 +258,20 @@ async function processEvent(
         break;
       }
 
-      case "off": {
+      case "off":
+      case "停止": {
         await setWatchEnabled(false);
         await replyMessage(
           accessToken,
           replyToken,
-          "監視を停止しました。\n再開するには「on」と送信してください。"
+          "監視を停止しました。\n再開するには「開始」と送信してください。"
         );
         logger.info("Monitoring disabled", { userId });
         break;
       }
 
-      case "clear": {
+      case "clear":
+      case "全削除": {
         await clearTargetDates();
         await replyMessage(
           accessToken,
@@ -241,21 +282,50 @@ async function processEvent(
         break;
       }
 
-      case "status": {
+      case "status":
+      case "状態": {
         const config = await getWatchConfig();
-        const status = config?.enabled ? "ON（監視中）" : "OFF（停止中）";
+        const state = await getWatchState();
+        const statusText = config?.enabled ? "ON（監視中）" : "OFF（停止中）";
         const dates = config?.targetDates;
         const dateInfo =
           dates && dates.length > 0
-            ? `\n監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
-            : "\n監視日: 全日程";
+            ? `監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
+            : "監視日: 全日程";
+
+        // Format last check time
+        let lastCheckInfo = "最終チェック: なし";
+        if (state?.checkedAt) {
+          const lastCheck = new Date(state.checkedAt);
+          const hours = String(lastCheck.getHours()).padStart(2, "0");
+          const minutes = String(lastCheck.getMinutes()).padStart(2, "0");
+          lastCheckInfo = `最終チェック: ${lastCheck.getMonth() + 1}/${lastCheck.getDate()} ${hours}:${minutes}`;
+        }
+
+        // Format last notification time
+        let lastNotifyInfo = "";
+        if (state?.lastNotifiedAt) {
+          const lastNotify = new Date(state.lastNotifiedAt);
+          const hours = String(lastNotify.getHours()).padStart(2, "0");
+          const minutes = String(lastNotify.getMinutes()).padStart(2, "0");
+          lastNotifyInfo = `\n最終通知: ${lastNotify.getMonth() + 1}/${lastNotify.getDate()} ${hours}:${minutes}`;
+        }
+
+        // Current availability status
+        const availabilityInfo = state?.has ? "現在の空き: あり" : "現在の空き: なし";
+
+        // Monitoring interval
+        const interval = config?.intervalMinutes ?? 2;
+
         await replyMessage(
           accessToken,
           replyToken,
-          `現在の状態: ${status}${dateInfo}\n\n` +
-            "日付を送信で追加\n" +
-            "「削除 1/15」で削除\n" +
-            "「clear」で全削除"
+          `【現在の設定】\n\n` +
+            `状態: ${statusText}\n` +
+            `監視間隔: ${interval}分ごと\n\n` +
+            `${dateInfo}\n\n` +
+            `${availabilityInfo}\n` +
+            `${lastCheckInfo}${lastNotifyInfo}`
         );
         break;
       }
@@ -268,16 +338,17 @@ async function processEvent(
           replyToken,
           "【サウナ予約監視ボット 使い方】\n\n" +
             "■ 初期設定\n" +
-            "「start」: 通知を受け取る登録\n\n" +
+            "「登録」: 通知を受け取る登録\n\n" +
             "■ 監視の開始・停止\n" +
-            "「on」: 監視を開始\n" +
-            "「off」: 監視を停止\n\n" +
+            "「開始」: 監視を開始\n" +
+            "「停止」: 監視を停止\n\n" +
             "■ 監視日の管理（複数可）\n" +
             "「1/15」: 1月15日を追加\n" +
+            "「1/2 1/3 1/4」: 複数日を一括追加\n" +
             "「削除 1/15」: 1月15日を削除\n" +
-            "「clear」: 全日付を削除\n\n" +
+            "「全削除」: 全日付を削除\n\n" +
             "■ 状態確認\n" +
-            "「status」: 現在の設定を表示"
+            "「状態」: 現在の設定を表示"
         );
         break;
       }

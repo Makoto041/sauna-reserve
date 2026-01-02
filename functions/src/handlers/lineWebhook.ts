@@ -260,17 +260,39 @@ async function processEvent(
         break;
       }
 
+      case "使い方":
+      case "help":
+      case "ヘルプ": {
+        await replyMessage(
+          accessToken,
+          replyToken,
+          "【サウナ予約監視ボット 使い方】\n\n" +
+            "■ 初期設定\n" +
+            "「start」: 通知を受け取る登録\n\n" +
+            "■ 監視の開始・停止\n" +
+            "「on」: 監視を開始\n" +
+            "「off」: 監視を停止\n\n" +
+            "■ 監視日の指定\n" +
+            "「1/15」: 1月15日を監視\n" +
+            "「2025/1/15」: 年指定も可\n" +
+            "「clear」: 日付指定を解除\n\n" +
+            "■ 監視間隔の設定\n" +
+            "「5分」: 5分間隔で監視\n" +
+            "「間隔10」: 10分間隔で監視\n" +
+            "※1〜60分で設定可能\n\n" +
+            "■ 状態確認\n" +
+            "「status」: 現在の設定を表示"
+        );
+        break;
+      }
+
       default: {
         await replyMessage(
           accessToken,
           replyToken,
-          "コマンド一覧:\n" +
-            "「1/15」等: 監視日を指定\n" +
-            "「5分」等: 監視間隔を設定(1-60分)\n" +
-            "「clear」: 日付指定を解除\n" +
-            "「on」: 監視開始\n" +
-            "「off」: 監視停止\n" +
-            "「status」: 状態確認"
+          "コマンドが認識できませんでした。\n\n" +
+            "「使い方」と送信すると\n" +
+            "使い方の一覧が表示されます。"
         );
         break;
       }

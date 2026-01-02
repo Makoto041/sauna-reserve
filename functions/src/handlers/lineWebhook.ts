@@ -19,6 +19,7 @@ import {
   replyMessage,
   setLineTarget,
   setWatchEnabled,
+  setIntervalMinutes,
   addTargetDate,
   removeTargetDate,
   clearTargetDates,
@@ -156,6 +157,29 @@ async function processEvent(
   logger.info("Processing command", { text, userId });
 
   try {
+    // Check for interval command (間隔 5 or 5分 or interval 5)
+    const intervalMatch = rawText.match(/^(?:間隔\s*|interval\s*)(\d+)$|^(\d+)分$/i);
+    if (intervalMatch) {
+      const minutes = parseInt(intervalMatch[1] || intervalMatch[2], 10);
+      if (minutes >= 1 && minutes <= 60) {
+        await setIntervalMinutes(minutes);
+        await replyMessage(
+          accessToken,
+          replyToken,
+          `監視間隔を ${minutes}分 に設定しました。`
+        );
+        logger.info("Interval updated", { userId, intervalMinutes: minutes });
+        return;
+      } else {
+        await replyMessage(
+          accessToken,
+          replyToken,
+          "監視間隔は1〜60分の範囲で指定してください。\n例: 「5分」「間隔 10」"
+        );
+        return;
+      }
+    }
+
     // Check for remove date command (削除 1/15 or 削除1/15)
     const removeMatch = rawText.match(/^削除\s*(.+)$/);
     if (removeMatch) {
@@ -347,6 +371,8 @@ async function processEvent(
             "「1/2 1/3 1/4」: 複数日を一括追加\n" +
             "「削除 1/15」: 1月15日を削除\n" +
             "「全削除」: 全日付を削除\n\n" +
+            "■ 監視間隔\n" +
+            "「5分」: 5分間隔に変更（1〜60分）\n\n" +
             "■ 状態確認\n" +
             "「状態」: 現在の設定を表示"
         );

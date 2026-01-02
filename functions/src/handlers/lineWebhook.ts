@@ -108,6 +108,22 @@ function formatDatesForDisplay(dates: string[]): string {
 }
 
 /**
+ * Formats a timestamp to JST date/time string.
+ * @param timestamp - Unix timestamp in milliseconds
+ * @returns Formatted string like "1/2 18:30"
+ */
+function formatTimestampJST(timestamp: number): string {
+  // Convert to JST (UTC+9)
+  const jstOffset = 9 * 60 * 60 * 1000;
+  const jstDate = new Date(timestamp + jstOffset);
+  const month = jstDate.getUTCMonth() + 1;
+  const day = jstDate.getUTCDate();
+  const hours = String(jstDate.getUTCHours()).padStart(2, "0");
+  const minutes = String(jstDate.getUTCMinutes()).padStart(2, "0");
+  return `${month}/${day} ${hours}:${minutes}`;
+}
+
+/**
  * Parses multiple dates from input (space or comma separated).
  * Example: "1/2 1/3" or "1/2, 1/3" or "1/2　1/3" (full-width space)
  * @returns Array of YYYY-MM-DD strings (only valid dates)
@@ -327,22 +343,16 @@ async function processEvent(
             ? `監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
             : "監視日: 全日程";
 
-        // Format last check time
+        // Format last check time (JST)
         let lastCheckInfo = "最終チェック: なし";
         if (state?.checkedAt) {
-          const lastCheck = new Date(state.checkedAt);
-          const hours = String(lastCheck.getHours()).padStart(2, "0");
-          const minutes = String(lastCheck.getMinutes()).padStart(2, "0");
-          lastCheckInfo = `最終チェック: ${lastCheck.getMonth() + 1}/${lastCheck.getDate()} ${hours}:${minutes}`;
+          lastCheckInfo = `最終チェック: ${formatTimestampJST(state.checkedAt)}`;
         }
 
-        // Format last notification time
+        // Format last notification time (JST)
         let lastNotifyInfo = "";
         if (state?.lastNotifiedAt) {
-          const lastNotify = new Date(state.lastNotifiedAt);
-          const hours = String(lastNotify.getHours()).padStart(2, "0");
-          const minutes = String(lastNotify.getMinutes()).padStart(2, "0");
-          lastNotifyInfo = `\n最終通知: ${lastNotify.getMonth() + 1}/${lastNotify.getDate()} ${hours}:${minutes}`;
+          lastNotifyInfo = `\n最終通知: ${formatTimestampJST(state.lastNotifiedAt)}`;
         }
 
         // Current availability status

@@ -51,21 +51,64 @@ export const watchScheduler = onSchedule(
         return;
       }
 
-      // Step 3: Check availability (with optional date filter)
-      const targetDate = config.targetDate;
-      const { hasAvailability, error } = await checkAvailability(targetDate);
+      // Step 3: Check availability for each target date (or all dates if none specified)
+      const targetDates = config.targetDates;
+      let hasAvailability = false;
+      let availableDates: string[] = [];
 
-      if (error) {
-        logger.error("Availability check failed", { error, targetDate });
-        // Don't update state on error to preserve previous state
-        return;
+      if (targetDates && targetDates.length > 0) {
+        // Check each target date
+        for (const targetDate of targetDates) {
+          const result = await checkAvailability(targetDate);
+          if (result.error) {
+            logger.error("Availability check failed", {
+              error: result.error,
+              targetDate,
+            });
+            continue;
+          }
+          if (result.hasAvailability) {
+            hasAvailability = true;
+            availableDates.push(targetDate);
+          }
+        }
+        logger.info("Availability check result", {
+          hasAvailability,
+          availableDates,
+          checkedDates: targetDates.length,
+        });
+      } else {
+        // Check all dates
+        const result = await checkAvailability(undefined);
+        if (result.error) {
+          logger.error("Availability check failed", { error: result.error });
+          return;
+        }
+        hasAvailability = result.hasAvailability;
+        logger.info("Availability check result (all dates)", { hasAvailability });
       }
 
-      logger.info("Availability check result", { hasAvailability, targetDate });
-
-      // Step 4: Get previous state
+      // Step 4: Get previous state and check if target dates changed
       const previousState = await getWatchState();
-      const hadAvailability = previousState?.has ?? false;
+      const previousTargetDates = previousState?.checkedTargetDates ?? [];
+      const currentTargetDates = targetDates ?? [];
+
+      // Normalize for comparison (sort and stringify)
+      const prevDatesKey = [...previousTargetDates].sort().join(",");
+      const currDatesKey = [...currentTargetDates].sort().join(",");
+      const targetDatesChanged = prevDatesKey !== currDatesKey;
+
+      if (targetDatesChanged) {
+        logger.info("Target dates changed, resetting state", {
+          previous: previousTargetDates,
+          current: currentTargetDates,
+        });
+      }
+
+      // If target dates changed, treat as fresh start (ignore previous availability)
+      const hadAvailability = targetDatesChanged
+        ? false
+        : (previousState?.has ?? false);
 
       // Step 5: Determine if notification is needed
       // Only notify when state changes from false to true
@@ -77,16 +120,22 @@ export const watchScheduler = onSchedule(
         const accessToken = lineChannelAccessToken.value();
         const targetUrl = getTargetUrl();
 
-        // Format date for message
-        const dateInfo = targetDate
-          ? (() => {
-              const [year, month, day] = targetDate.split("-");
-              return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日の`;
-            })()
-          : "";
+        // Format dates for message
+        let dateInfo = "";
+        if (availableDates.length > 0) {
+          const formattedDates = availableDates
+            .map((d) => {
+              const [year, month, day] = d.split("-");
+              return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
+            })
+            .join("\n");
+          dateInfo = `以下の日程で空きが見つかりました！\n${formattedDates}\n\n`;
+        } else {
+          dateInfo = "空きが見つかりました！\n\n";
+        }
 
         const message =
-          `${dateInfo}空きが見つかりました！\n\n` +
+          `${dateInfo}` +
           `今すぐ予約ページを確認してください:\n` +
           `${targetUrl}`;
 
@@ -103,8 +152,8 @@ export const watchScheduler = onSchedule(
         logger.info("No availability");
       }
 
-      // Step 6: Update state
-      await updateWatchState(hasAvailability, shouldNotify);
+      // Step 6: Update state with current target dates
+      await updateWatchState(hasAvailability, shouldNotify, currentTargetDates);
 
       const duration = Date.now() - startTime;
       logger.info("Watch scheduler completed", { duration, hasAvailability });

@@ -19,8 +19,9 @@ import {
   replyMessage,
   setLineTarget,
   setWatchEnabled,
-  setTargetDate,
-  setIntervalMinutes,
+  addTargetDate,
+  removeTargetDate,
+  clearTargetDates,
   getWatchConfig,
   ensureWatchConfig,
 } from "../lib/index.js";
@@ -98,34 +99,10 @@ function formatDateForDisplay(dateStr: string): string {
 }
 
 /**
- * Parses interval command (e.g., "間隔5", "interval 10", "5分")
- * @returns interval in minutes (1-60) or null if invalid
+ * Formats multiple dates for display.
  */
-function parseInterval(input: string): number | null {
-  const trimmed = input.trim().toLowerCase();
-
-  // Pattern: "間隔N" or "間隔 N"
-  const kanjiMatch = trimmed.match(/^間隔\s*(\d+)$/);
-  if (kanjiMatch) {
-    const minutes = parseInt(kanjiMatch[1], 10);
-    if (minutes >= 1 && minutes <= 60) return minutes;
-  }
-
-  // Pattern: "interval N" or "interval N"
-  const engMatch = trimmed.match(/^interval\s+(\d+)$/);
-  if (engMatch) {
-    const minutes = parseInt(engMatch[1], 10);
-    if (minutes >= 1 && minutes <= 60) return minutes;
-  }
-
-  // Pattern: "N分" (e.g., "5分", "10分")
-  const minMatch = trimmed.match(/^(\d+)分$/);
-  if (minMatch) {
-    const minutes = parseInt(minMatch[1], 10);
-    if (minutes >= 1 && minutes <= 60) return minutes;
-  }
-
-  return null;
+function formatDatesForDisplay(dates: string[]): string {
+  return dates.map(formatDateForDisplay).join("\n");
 }
 
 // Define secrets
@@ -158,33 +135,51 @@ async function processEvent(
   logger.info("Processing command", { text, userId });
 
   try {
-    // Check if it's an interval command first
-    const parsedInterval = parseInterval(rawText);
-    if (parsedInterval) {
-      await setIntervalMinutes(parsedInterval);
-      await replyMessage(
-        accessToken,
-        replyToken,
-        `監視間隔を ${parsedInterval}分 に設定しました。\n\n` +
-          "※次回のスケジューラー実行から反映されます。"
-      );
-      logger.info("Interval set", { userId, intervalMinutes: parsedInterval });
-      return;
+    // Check for remove date command (削除 1/15 or 削除1/15)
+    const removeMatch = rawText.match(/^削除\s*(.+)$/);
+    if (removeMatch) {
+      const parsedDate = parseDate(removeMatch[1]);
+      if (parsedDate) {
+        const removed = await removeTargetDate(parsedDate);
+        const displayDate = formatDateForDisplay(parsedDate);
+        if (removed) {
+          const config = await getWatchConfig();
+          const remaining = config?.targetDates?.length ?? 0;
+          await replyMessage(
+            accessToken,
+            replyToken,
+            `${displayDate} を監視対象から削除しました。\n\n` +
+              `残りの監視日: ${remaining}件`
+          );
+          logger.info("Target date removed", { userId, targetDate: parsedDate });
+        } else {
+          await replyMessage(
+            accessToken,
+            replyToken,
+            `${displayDate} は監視対象に含まれていません。`
+          );
+        }
+        return;
+      }
     }
 
-    // Check if it's a date command
+    // Check if it's a date command (add date)
     const parsedDate = parseDate(rawText);
     if (parsedDate) {
-      await setTargetDate(parsedDate);
+      await addTargetDate(parsedDate);
       const displayDate = formatDateForDisplay(parsedDate);
+      const config = await getWatchConfig();
+      const total = config?.targetDates?.length ?? 1;
       await replyMessage(
         accessToken,
         replyToken,
-        `監視日を ${displayDate} に設定しました。\n\n` +
+        `${displayDate} を監視対象に追加しました。\n\n` +
+          `現在の監視日数: ${total}件\n\n` +
           "「on」で監視開始\n" +
-          "「clear」で日付指定を解除"
+          "「status」で一覧確認\n" +
+          "「削除 1/15」で日付を削除"
       );
-      logger.info("Target date set", { userId, targetDate: parsedDate });
+      logger.info("Target date added", { userId, targetDate: parsedDate });
       return;
     }
 
@@ -196,10 +191,12 @@ async function processEvent(
           accessToken,
           replyToken,
           "登録完了しました！\n\n" +
-            "日付を送信: 監視日を指定（例: 1/15）\n" +
+            "日付を送信: 監視日を追加（例: 1/15）\n" +
+            "複数日程を追加できます\n" +
             "「on」で監視開始\n" +
             "「off」で監視停止\n" +
-            "「status」で状態確認"
+            "「status」で状態確認\n" +
+            "「使い方」で詳細を表示"
         );
         logger.info("User registered", { userId });
         break;
@@ -208,13 +205,15 @@ async function processEvent(
       case "on": {
         const config = await getWatchConfig();
         await setWatchEnabled(true);
-        const dateInfo = config?.targetDate
-          ? `\n監視日: ${formatDateForDisplay(config.targetDate)}`
-          : "\n（全日程を監視）";
+        const dates = config?.targetDates;
+        const dateInfo =
+          dates && dates.length > 0
+            ? `\n監視日:\n${formatDatesForDisplay(dates)}`
+            : "\n（全日程を監視）";
         await replyMessage(
           accessToken,
           replyToken,
-          `監視を開始しました。${dateInfo}\n空きが出たら通知します。`
+          `監視を開始しました。${dateInfo}\n\n空きが出たら通知します。`
         );
         logger.info("Monitoring enabled", { userId });
         break;
@@ -232,30 +231,31 @@ async function processEvent(
       }
 
       case "clear": {
-        await setTargetDate(null);
+        await clearTargetDates();
         await replyMessage(
           accessToken,
           replyToken,
-          "日付指定を解除しました。\n全日程を監視対象にします。"
+          "全ての監視日を削除しました。\n全日程を監視対象にします。"
         );
-        logger.info("Target date cleared", { userId });
+        logger.info("All target dates cleared", { userId });
         break;
       }
 
       case "status": {
         const config = await getWatchConfig();
         const status = config?.enabled ? "ON（監視中）" : "OFF（停止中）";
-        const dateInfo = config?.targetDate
-          ? `\n監視日: ${formatDateForDisplay(config.targetDate)}`
-          : "\n監視日: 全日程";
-        const intervalInfo = `\n監視間隔: ${config?.intervalMinutes ?? 2}分`;
+        const dates = config?.targetDates;
+        const dateInfo =
+          dates && dates.length > 0
+            ? `\n監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
+            : "\n監視日: 全日程";
         await replyMessage(
           accessToken,
           replyToken,
-          `現在の状態: ${status}${dateInfo}${intervalInfo}\n\n` +
-            "日付を送信で監視日を変更\n" +
-            "「5分」等で監視間隔を変更\n" +
-            "「clear」で日付指定を解除"
+          `現在の状態: ${status}${dateInfo}\n\n` +
+            "日付を送信で追加\n" +
+            "「削除 1/15」で削除\n" +
+            "「clear」で全削除"
         );
         break;
       }
@@ -272,14 +272,10 @@ async function processEvent(
             "■ 監視の開始・停止\n" +
             "「on」: 監視を開始\n" +
             "「off」: 監視を停止\n\n" +
-            "■ 監視日の指定\n" +
-            "「1/15」: 1月15日を監視\n" +
-            "「2025/1/15」: 年指定も可\n" +
-            "「clear」: 日付指定を解除\n\n" +
-            "■ 監視間隔の設定\n" +
-            "「5分」: 5分間隔で監視\n" +
-            "「間隔10」: 10分間隔で監視\n" +
-            "※1〜60分で設定可能\n\n" +
+            "■ 監視日の管理（複数可）\n" +
+            "「1/15」: 1月15日を追加\n" +
+            "「削除 1/15」: 1月15日を削除\n" +
+            "「clear」: 全日付を削除\n\n" +
             "■ 状態確認\n" +
             "「status」: 現在の設定を表示"
         );

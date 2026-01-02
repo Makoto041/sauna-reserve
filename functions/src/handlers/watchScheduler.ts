@@ -51,16 +51,17 @@ export const watchScheduler = onSchedule(
         return;
       }
 
-      // Step 3: Check availability
-      const { hasAvailability, error } = await checkAvailability();
+      // Step 3: Check availability (with optional date filter)
+      const targetDate = config.targetDate;
+      const { hasAvailability, error } = await checkAvailability(targetDate);
 
       if (error) {
-        logger.error("Availability check failed", { error });
+        logger.error("Availability check failed", { error, targetDate });
         // Don't update state on error to preserve previous state
         return;
       }
 
-      logger.info("Availability check result", { hasAvailability });
+      logger.info("Availability check result", { hasAvailability, targetDate });
 
       // Step 4: Get previous state
       const previousState = await getWatchState();
@@ -76,8 +77,16 @@ export const watchScheduler = onSchedule(
         const accessToken = lineChannelAccessToken.value();
         const targetUrl = getTargetUrl();
 
+        // Format date for message
+        const dateInfo = targetDate
+          ? (() => {
+              const [year, month, day] = targetDate.split("-");
+              return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日の`;
+            })()
+          : "";
+
         const message =
-          `空きが見つかりました！\n\n` +
+          `${dateInfo}空きが見つかりました！\n\n` +
           `今すぐ予約ページを確認してください:\n` +
           `${targetUrl}`;
 

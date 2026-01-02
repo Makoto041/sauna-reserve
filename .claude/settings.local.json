@@ -9,7 +9,19 @@
       "Bash(git init:*)",
       "Bash(git branch:*)",
       "Bash(git add:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(gh repo create:*)",
+      "Bash(gh repo edit:*)",
+      "Bash(git checkout:*)",
+      "Bash(npm run deploy:*)",
+      "Bash(git push:*)",
+      "Bash(gh pr create:*)",
+      "WebFetch(domain:select-type.com)",
+      "Bash(gh pr merge:*)",
+      "Bash(curl -s 'https://select-type.com/rsv/?id=0AEeQuFE0HM' -H 'User-Agent: Mozilla/5.0')",
+      "Bash(git pull:*)",
+      "Bash(cat:*)",
+      "Bash(git check-ignore:*)"
     ]
   }
 }

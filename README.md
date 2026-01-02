@@ -6,7 +6,7 @@ SelectType予約ページの空きを定期監視し、空きが出たらLINEに
 
 - 2分ごとに予約ページをチェック
 - 空き（●または▲）が見つかったらLINE通知
-- **特定の日付のみ監視可能**（例: 1/15 の空きだけ通知）
+- **複数の日付を同時監視可能**（例: 1/15, 1/16, 1/20 を同時に監視）
 - LINEメッセージで監視のON/OFF切り替え可能（Firebase課金の最適化）
 - 状態変化時のみ通知（連続通知を防止）
 
@@ -192,21 +192,24 @@ npm run test:watch
 {
   "enabled": true,
   "intervalMinutes": 2,
-  "targetDate": "2025-01-15",
+  "targetDates": ["2025-01-15", "2025-01-16"],
   "updatedAt": 1704067200000
 }
 ```
 
-> `targetDate` は省略可能。省略時は全日程を監視。
+> `targetDates` は省略可能。省略時は全日程を監視。複数日付を指定可能。
 
 ### watch/state
 ```json
 {
   "has": false,
   "checkedAt": 1704067200000,
-  "lastNotifiedAt": 1704060000000
+  "lastNotifiedAt": 1704060000000,
+  "checkedTargetDates": ["2025-01-15", "2025-01-16"]
 }
 ```
+
+> `checkedTargetDates` は前回チェック時の対象日付。日付が変更されると状態がリセットされ、新しい日付で空きがあれば通知が送信される。
 
 ---
 

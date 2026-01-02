@@ -19,7 +19,9 @@ import {
   replyMessage,
   setLineTarget,
   setWatchEnabled,
-  setTargetDate,
+  addTargetDate,
+  removeTargetDate,
+  clearTargetDates,
   getWatchConfig,
   ensureWatchConfig,
 } from "../lib/index.js";
@@ -96,6 +98,13 @@ function formatDateForDisplay(dateStr: string): string {
   return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
 }
 
+/**
+ * Formats multiple dates for display.
+ */
+function formatDatesForDisplay(dates: string[]): string {
+  return dates.map(formatDateForDisplay).join("\n");
+}
+
 // Define secrets
 const lineChannelAccessToken = defineSecret("LINE_CHANNEL_ACCESS_TOKEN");
 const lineChannelSecret = defineSecret("LINE_CHANNEL_SECRET");
@@ -126,19 +135,51 @@ async function processEvent(
   logger.info("Processing command", { text, userId });
 
   try {
-    // Check if it's a date command first
+    // Check for remove date command (削除 1/15 or 削除1/15)
+    const removeMatch = rawText.match(/^削除\s*(.+)$/);
+    if (removeMatch) {
+      const parsedDate = parseDate(removeMatch[1]);
+      if (parsedDate) {
+        const removed = await removeTargetDate(parsedDate);
+        const displayDate = formatDateForDisplay(parsedDate);
+        if (removed) {
+          const config = await getWatchConfig();
+          const remaining = config?.targetDates?.length ?? 0;
+          await replyMessage(
+            accessToken,
+            replyToken,
+            `${displayDate} を監視対象から削除しました。\n\n` +
+              `残りの監視日: ${remaining}件`
+          );
+          logger.info("Target date removed", { userId, targetDate: parsedDate });
+        } else {
+          await replyMessage(
+            accessToken,
+            replyToken,
+            `${displayDate} は監視対象に含まれていません。`
+          );
+        }
+        return;
+      }
+    }
+
+    // Check if it's a date command (add date)
     const parsedDate = parseDate(rawText);
     if (parsedDate) {
-      await setTargetDate(parsedDate);
+      await addTargetDate(parsedDate);
       const displayDate = formatDateForDisplay(parsedDate);
+      const config = await getWatchConfig();
+      const total = config?.targetDates?.length ?? 1;
       await replyMessage(
         accessToken,
         replyToken,
-        `監視日を ${displayDate} に設定しました。\n\n` +
+        `${displayDate} を監視対象に追加しました。\n\n` +
+          `現在の監視日数: ${total}件\n\n` +
           "「on」で監視開始\n" +
-          "「clear」で日付指定を解除"
+          "「status」で一覧確認\n" +
+          "「削除 1/15」で日付を削除"
       );
-      logger.info("Target date set", { userId, targetDate: parsedDate });
+      logger.info("Target date added", { userId, targetDate: parsedDate });
       return;
     }
 
@@ -150,10 +191,12 @@ async function processEvent(
           accessToken,
           replyToken,
           "登録完了しました！\n\n" +
-            "日付を送信: 監視日を指定（例: 1/15）\n" +
+            "日付を送信: 監視日を追加（例: 1/15）\n" +
+            "複数日程を追加できます\n" +
             "「on」で監視開始\n" +
             "「off」で監視停止\n" +
-            "「status」で状態確認"
+            "「status」で状態確認\n" +
+            "「使い方」で詳細を表示"
         );
         logger.info("User registered", { userId });
         break;
@@ -162,13 +205,15 @@ async function processEvent(
       case "on": {
         const config = await getWatchConfig();
         await setWatchEnabled(true);
-        const dateInfo = config?.targetDate
-          ? `\n監視日: ${formatDateForDisplay(config.targetDate)}`
-          : "\n（全日程を監視）";
+        const dates = config?.targetDates;
+        const dateInfo =
+          dates && dates.length > 0
+            ? `\n監視日:\n${formatDatesForDisplay(dates)}`
+            : "\n（全日程を監視）";
         await replyMessage(
           accessToken,
           replyToken,
-          `監視を開始しました。${dateInfo}\n空きが出たら通知します。`
+          `監視を開始しました。${dateInfo}\n\n空きが出たら通知します。`
         );
         logger.info("Monitoring enabled", { userId });
         break;
@@ -186,28 +231,53 @@ async function processEvent(
       }
 
       case "clear": {
-        await setTargetDate(null);
+        await clearTargetDates();
         await replyMessage(
           accessToken,
           replyToken,
-          "日付指定を解除しました。\n全日程を監視対象にします。"
+          "全ての監視日を削除しました。\n全日程を監視対象にします。"
         );
-        logger.info("Target date cleared", { userId });
+        logger.info("All target dates cleared", { userId });
         break;
       }
 
       case "status": {
         const config = await getWatchConfig();
         const status = config?.enabled ? "ON（監視中）" : "OFF（停止中）";
-        const dateInfo = config?.targetDate
-          ? `\n監視日: ${formatDateForDisplay(config.targetDate)}`
-          : "\n監視日: 全日程";
+        const dates = config?.targetDates;
+        const dateInfo =
+          dates && dates.length > 0
+            ? `\n監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
+            : "\n監視日: 全日程";
         await replyMessage(
           accessToken,
           replyToken,
           `現在の状態: ${status}${dateInfo}\n\n` +
-            "日付を送信で監視日を変更\n" +
-            "「clear」で日付指定を解除"
+            "日付を送信で追加\n" +
+            "「削除 1/15」で削除\n" +
+            "「clear」で全削除"
+        );
+        break;
+      }
+
+      case "使い方":
+      case "help":
+      case "ヘルプ": {
+        await replyMessage(
+          accessToken,
+          replyToken,
+          "【サウナ予約監視ボット 使い方】\n\n" +
+            "■ 初期設定\n" +
+            "「start」: 通知を受け取る登録\n\n" +
+            "■ 監視の開始・停止\n" +
+            "「on」: 監視を開始\n" +
+            "「off」: 監視を停止\n\n" +
+            "■ 監視日の管理（複数可）\n" +
+            "「1/15」: 1月15日を追加\n" +
+            "「削除 1/15」: 1月15日を削除\n" +
+            "「clear」: 全日付を削除\n\n" +
+            "■ 状態確認\n" +
+            "「status」: 現在の設定を表示"
         );
         break;
       }
@@ -216,12 +286,9 @@ async function processEvent(
         await replyMessage(
           accessToken,
           replyToken,
-          "コマンド一覧:\n" +
-            "「1/15」等: 監視日を指定\n" +
-            "「clear」: 日付指定を解除\n" +
-            "「on」: 監視開始\n" +
-            "「off」: 監視停止\n" +
-            "「status」: 状態確認"
+          "コマンドが認識できませんでした。\n\n" +
+            "「使い方」と送信すると\n" +
+            "使い方の一覧が表示されます。"
         );
         break;
       }

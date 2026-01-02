@@ -74,29 +74,77 @@ export async function setIntervalMinutes(
 }
 
 /**
- * Sets the target date for monitoring.
- * @param targetDate - Date in YYYY-MM-DD format, or null to clear
+ * Adds a target date for monitoring.
+ * @param targetDate - Date in YYYY-MM-DD format
  */
-export async function setTargetDate(targetDate: string | null): Promise<void> {
+export async function addTargetDate(targetDate: string): Promise<void> {
   const db = getFirestore();
   const docRef = db.doc(WATCH_CONFIG_PATH);
+  const doc = await docRef.get();
+  const currentDates: string[] =
+    (doc.exists && (doc.data() as WatchConfigDoc)?.targetDates) || [];
 
-  if (targetDate === null) {
-    // Remove targetDate field
-    const { FieldValue } = await import("firebase-admin/firestore");
-    await docRef.update({
-      targetDate: FieldValue.delete(),
-      updatedAt: Date.now(),
-    });
-  } else {
+  // Avoid duplicates and sort
+  if (!currentDates.includes(targetDate)) {
+    const newDates = [...currentDates, targetDate].sort();
     await docRef.set(
       {
-        targetDate,
+        targetDates: newDates,
         updatedAt: Date.now(),
       },
       { merge: true }
     );
   }
+}
+
+/**
+ * Removes a target date from monitoring.
+ * @param targetDate - Date in YYYY-MM-DD format
+ */
+export async function removeTargetDate(targetDate: string): Promise<boolean> {
+  const db = getFirestore();
+  const docRef = db.doc(WATCH_CONFIG_PATH);
+  const doc = await docRef.get();
+  const currentDates: string[] =
+    (doc.exists && (doc.data() as WatchConfigDoc)?.targetDates) || [];
+
+  const index = currentDates.indexOf(targetDate);
+  if (index === -1) {
+    return false; // Date not found
+  }
+
+  const newDates = currentDates.filter((d) => d !== targetDate);
+
+  if (newDates.length === 0) {
+    // Remove field if empty
+    const { FieldValue } = await import("firebase-admin/firestore");
+    await docRef.update({
+      targetDates: FieldValue.delete(),
+      updatedAt: Date.now(),
+    });
+  } else {
+    await docRef.set(
+      {
+        targetDates: newDates,
+        updatedAt: Date.now(),
+      },
+      { merge: true }
+    );
+  }
+  return true;
+}
+
+/**
+ * Clears all target dates.
+ */
+export async function clearTargetDates(): Promise<void> {
+  const db = getFirestore();
+  const docRef = db.doc(WATCH_CONFIG_PATH);
+  const { FieldValue } = await import("firebase-admin/firestore");
+  await docRef.update({
+    targetDates: FieldValue.delete(),
+    updatedAt: Date.now(),
+  });
 }
 
 /**
@@ -131,10 +179,14 @@ export async function getWatchState(): Promise<WatchStateDoc | null> {
 
 /**
  * Updates the watch state.
+ * @param has - Whether availability was found
+ * @param notified - Whether a notification was sent
+ * @param checkedTargetDates - The target dates that were checked (for change detection)
  */
 export async function updateWatchState(
   has: boolean,
-  notified: boolean
+  notified: boolean,
+  checkedTargetDates?: string[]
 ): Promise<void> {
   const db = getFirestore();
   const now = Date.now();
@@ -142,6 +194,7 @@ export async function updateWatchState(
     has,
     checkedAt: now,
     ...(notified ? { lastNotifiedAt: now } : {}),
+    ...(checkedTargetDates ? { checkedTargetDates } : {}),
   };
   await db.doc(WATCH_STATE_PATH).set(data, { merge: true });
 }

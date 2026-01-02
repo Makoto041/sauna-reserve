@@ -20,6 +20,7 @@ import {
   setLineTarget,
   setWatchEnabled,
   setTargetDate,
+  setIntervalMinutes,
   getWatchConfig,
   ensureWatchConfig,
 } from "../lib/index.js";
@@ -96,6 +97,37 @@ function formatDateForDisplay(dateStr: string): string {
   return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
 }
 
+/**
+ * Parses interval command (e.g., "間隔5", "interval 10", "5分")
+ * @returns interval in minutes (1-60) or null if invalid
+ */
+function parseInterval(input: string): number | null {
+  const trimmed = input.trim().toLowerCase();
+
+  // Pattern: "間隔N" or "間隔 N"
+  const kanjiMatch = trimmed.match(/^間隔\s*(\d+)$/);
+  if (kanjiMatch) {
+    const minutes = parseInt(kanjiMatch[1], 10);
+    if (minutes >= 1 && minutes <= 60) return minutes;
+  }
+
+  // Pattern: "interval N" or "interval N"
+  const engMatch = trimmed.match(/^interval\s+(\d+)$/);
+  if (engMatch) {
+    const minutes = parseInt(engMatch[1], 10);
+    if (minutes >= 1 && minutes <= 60) return minutes;
+  }
+
+  // Pattern: "N分" (e.g., "5分", "10分")
+  const minMatch = trimmed.match(/^(\d+)分$/);
+  if (minMatch) {
+    const minutes = parseInt(minMatch[1], 10);
+    if (minutes >= 1 && minutes <= 60) return minutes;
+  }
+
+  return null;
+}
+
 // Define secrets
 const lineChannelAccessToken = defineSecret("LINE_CHANNEL_ACCESS_TOKEN");
 const lineChannelSecret = defineSecret("LINE_CHANNEL_SECRET");
@@ -126,7 +158,21 @@ async function processEvent(
   logger.info("Processing command", { text, userId });
 
   try {
-    // Check if it's a date command first
+    // Check if it's an interval command first
+    const parsedInterval = parseInterval(rawText);
+    if (parsedInterval) {
+      await setIntervalMinutes(parsedInterval);
+      await replyMessage(
+        accessToken,
+        replyToken,
+        `監視間隔を ${parsedInterval}分 に設定しました。\n\n` +
+          "※次回のスケジューラー実行から反映されます。"
+      );
+      logger.info("Interval set", { userId, intervalMinutes: parsedInterval });
+      return;
+    }
+
+    // Check if it's a date command
     const parsedDate = parseDate(rawText);
     if (parsedDate) {
       await setTargetDate(parsedDate);
@@ -202,11 +248,13 @@ async function processEvent(
         const dateInfo = config?.targetDate
           ? `\n監視日: ${formatDateForDisplay(config.targetDate)}`
           : "\n監視日: 全日程";
+        const intervalInfo = `\n監視間隔: ${config?.intervalMinutes ?? 2}分`;
         await replyMessage(
           accessToken,
           replyToken,
-          `現在の状態: ${status}${dateInfo}\n\n` +
+          `現在の状態: ${status}${dateInfo}${intervalInfo}\n\n` +
             "日付を送信で監視日を変更\n" +
+            "「5分」等で監視間隔を変更\n" +
             "「clear」で日付指定を解除"
         );
         break;
@@ -218,6 +266,7 @@ async function processEvent(
           replyToken,
           "コマンド一覧:\n" +
             "「1/15」等: 監視日を指定\n" +
+            "「5分」等: 監視間隔を設定(1-60分)\n" +
             "「clear」: 日付指定を解除\n" +
             "「on」: 監視開始\n" +
             "「off」: 監視停止\n" +

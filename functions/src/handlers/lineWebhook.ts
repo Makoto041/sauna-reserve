@@ -205,6 +205,16 @@ async function processEvent(
           );
         }
         return;
+      } else {
+        // 削除コマンドだが日付が無効な場合
+        await replyMessage(
+          accessToken,
+          replyToken,
+          `日付の形式が正しくありません。\n\n` +
+            `例: 「削除 1/15」「削除 2025/1/15」\n` +
+            `※複数日付の一括削除はできません`
+        );
+        return;
       }
     }
 

@@ -54,7 +54,8 @@ export const watchScheduler = onSchedule(
       // Step 3: Check availability for each target date (or all dates if none specified)
       const targetDates = config.targetDates;
       let hasAvailability = false;
-      let availableDates: string[] = [];
+      // Map of date -> time slots
+      const availableSlotsMap: Map<string, string[]> = new Map();
 
       if (targetDates && targetDates.length > 0) {
         // Check each target date
@@ -69,12 +70,12 @@ export const watchScheduler = onSchedule(
           }
           if (result.hasAvailability) {
             hasAvailability = true;
-            availableDates.push(targetDate);
+            availableSlotsMap.set(targetDate, result.timeSlots);
           }
         }
         logger.info("Availability check result", {
           hasAvailability,
-          availableDates,
+          availableDates: Array.from(availableSlotsMap.keys()),
           checkedDates: targetDates.length,
         });
       } else {
@@ -120,16 +121,21 @@ export const watchScheduler = onSchedule(
         const accessToken = lineChannelAccessToken.value();
         const targetUrl = getTargetUrl();
 
-        // Format dates for message
+        // Format dates and time slots for message
         let dateInfo = "";
-        if (availableDates.length > 0) {
-          const formattedDates = availableDates
-            .map((d) => {
-              const [year, month, day] = d.split("-");
-              return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
-            })
-            .join("\n");
-          dateInfo = `以下の日程で空きが見つかりました！\n${formattedDates}\n\n`;
+        if (availableSlotsMap.size > 0) {
+          const formattedEntries: string[] = [];
+          for (const [date, slots] of availableSlotsMap) {
+            const [year, month, day] = date.split("-");
+            const dateStr = `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
+            if (slots.length > 0) {
+              // Include time slots
+              formattedEntries.push(`${dateStr}\n  ${slots.join(", ")}`);
+            } else {
+              formattedEntries.push(dateStr);
+            }
+          }
+          dateInfo = `以下の日程で空きが見つかりました！\n\n${formattedEntries.join("\n\n")}\n\n`;
         } else {
           dateInfo = "空きが見つかりました！\n\n";
         }

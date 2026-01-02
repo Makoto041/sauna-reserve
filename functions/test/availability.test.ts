@@ -1,5 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { detectAvailability } from "../src/lib/availability.js";
+import {
+  detectAvailability,
+  detectAvailabilityWithSlots,
+} from "../src/lib/availability.js";
 
 /**
  * Test fixtures based on actual SelectType HTML structure.
@@ -406,6 +409,139 @@ describe("detectAvailability", () => {
         </div>
       `;
       expect(detectAvailability(html, "2025-01-15")).toBe(false);
+    });
+  });
+});
+
+describe("detectAvailabilityWithSlots", () => {
+  describe("with SelectType structure", () => {
+    it("should return available time slots for target date", () => {
+      // 1/3 column has availability at 12:00 and 14:00
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["×", "●", "×"], // 12:00
+          ["×", "×", "×"], // 13:00
+          ["×", "●", "×"], // 14:00
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-03");
+      expect(result.hasAvailability).toBe(true);
+      expect(result.timeSlots).toEqual(["12:00", "14:00"]);
+    });
+
+    it("should return empty time slots when no availability", () => {
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["●", "×", "●"],
+          ["●", "×", "●"],
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-03");
+      expect(result.hasAvailability).toBe(false);
+      expect(result.timeSlots).toEqual([]);
+    });
+
+    it("should return all available time slots", () => {
+      // 1/2 column has availability at all times
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["●", "×", "×"], // 12:00
+          ["▲", "×", "×"], // 13:00
+          ["●", "×", "×"], // 14:00
+          ["▲", "×", "×"], // 15:00
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-02");
+      expect(result.hasAvailability).toBe(true);
+      expect(result.timeSlots).toEqual(["12:00", "13:00", "14:00", "15:00"]);
+    });
+
+    it("should return single time slot", () => {
+      // Only one slot available
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["×", "×", "×"], // 12:00
+          ["×", "×", "×"], // 13:00
+          ["×", "●", "×"], // 14:00
+          ["×", "×", "×"], // 15:00
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-03");
+      expect(result.hasAvailability).toBe(true);
+      expect(result.timeSlots).toEqual(["14:00"]);
+    });
+
+    it("should handle ▲ marker as available", () => {
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["×", "▲", "×"], // 12:00
+          ["×", "×", "×"], // 13:00
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-03");
+      expect(result.hasAvailability).toBe(true);
+      expect(result.timeSlots).toEqual(["12:00"]);
+    });
+
+    it("should return empty slots when date not in calendar", () => {
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["●", "●", "●"],
+          ["●", "●", "●"],
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html, "2025-01-15");
+      expect(result.hasAvailability).toBe(false);
+      expect(result.timeSlots).toEqual([]);
+    });
+  });
+
+  describe("without date filter", () => {
+    it("should return empty timeSlots when availability found (no date context)", () => {
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["×", "●", "×"],
+          ["×", "×", "×"],
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html);
+      expect(result.hasAvailability).toBe(true);
+      // Without a specific date, we can't determine which time slots belong to which date
+      expect(result.timeSlots).toEqual([]);
+    });
+
+    it("should return no availability when all slots are ×", () => {
+      const html = createSelectTypeHtml(
+        ["1/2", "1/3", "1/4"],
+        [
+          ["×", "×", "×"],
+          ["×", "×", "×"],
+        ]
+      );
+      const result = detectAvailabilityWithSlots(html);
+      expect(result.hasAvailability).toBe(false);
+      expect(result.timeSlots).toEqual([]);
+    });
+  });
+
+  describe("with non-SelectType HTML (fallback)", () => {
+    it("should return empty timeSlots for generic HTML", () => {
+      const html = `
+        <div class="calendar">
+          <div class="day">15</div><span>●</span>
+        </div>
+      `;
+      const result = detectAvailabilityWithSlots(html, "2025-01-15");
+      expect(result.hasAvailability).toBe(true);
+      // Generic detection doesn't extract time slots
+      expect(result.timeSlots).toEqual([]);
     });
   });
 });

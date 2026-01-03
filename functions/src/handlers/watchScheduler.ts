@@ -1,7 +1,8 @@
 /**
  * Watch Scheduler Handler
  *
- * Runs every 2 minutes to check availability and send notifications.
+ * Runs every 1 minute to check availability and send notifications.
+ * Uses intervalMinutes setting from Firestore to control actual check frequency.
  * Respects the enabled flag to minimize unnecessary API calls.
  */
 
@@ -22,11 +23,12 @@ import {
 const lineChannelAccessToken = defineSecret("LINE_CHANNEL_ACCESS_TOKEN");
 
 /**
- * Scheduled function that runs every 2 minutes.
+ * Scheduled function that runs every 1 minute.
+ * The actual check interval is controlled by intervalMinutes in Firestore.
  */
 export const watchScheduler = onSchedule(
   {
-    schedule: "every 2 minutes",
+    schedule: "every 1 minutes",
     timeZone: "Asia/Tokyo",
     secrets: [lineChannelAccessToken],
     region: "asia-northeast1",
@@ -44,6 +46,23 @@ export const watchScheduler = onSchedule(
         return;
       }
 
+      // Step 1.5: Check if enough time has passed since last check (dynamic interval)
+      const intervalMinutes = config.intervalMinutes ?? 2;
+      const state = await getWatchState();
+      if (state?.checkedAt) {
+        const elapsedMinutes = (startTime - state.checkedAt) / (1000 * 60);
+        logger.info("Interval check", {
+          elapsedMinutes: Math.round(elapsedMinutes * 10) / 10,
+          intervalMinutes,
+          threshold: intervalMinutes - 0.5,
+        });
+        if (elapsedMinutes < intervalMinutes - 0.5) {
+          // Allow 30 seconds tolerance
+          logger.info("Skipping check, interval not reached");
+          return;
+        }
+      }
+
       // Step 2: Get target user
       const target = await getLineTarget();
       if (!target?.userId) {
@@ -54,7 +73,8 @@ export const watchScheduler = onSchedule(
       // Step 3: Check availability for each target date (or all dates if none specified)
       const targetDates = config.targetDates;
       let hasAvailability = false;
-      let availableDates: string[] = [];
+      // Map of date -> time slots
+      const availableSlotsMap: Map<string, string[]> = new Map();
 
       if (targetDates && targetDates.length > 0) {
         // Check each target date
@@ -69,12 +89,12 @@ export const watchScheduler = onSchedule(
           }
           if (result.hasAvailability) {
             hasAvailability = true;
-            availableDates.push(targetDate);
+            availableSlotsMap.set(targetDate, result.timeSlots);
           }
         }
         logger.info("Availability check result", {
           hasAvailability,
-          availableDates,
+          availableDates: Array.from(availableSlotsMap.keys()),
           checkedDates: targetDates.length,
         });
       } else {
@@ -88,9 +108,8 @@ export const watchScheduler = onSchedule(
         logger.info("Availability check result (all dates)", { hasAvailability });
       }
 
-      // Step 4: Get previous state and check if target dates changed
-      const previousState = await getWatchState();
-      const previousTargetDates = previousState?.checkedTargetDates ?? [];
+      // Step 4: Check if target dates changed (reuse state from Step 1.5)
+      const previousTargetDates = state?.checkedTargetDates ?? [];
       const currentTargetDates = targetDates ?? [];
 
       // Normalize for comparison (sort and stringify)
@@ -106,9 +125,7 @@ export const watchScheduler = onSchedule(
       }
 
       // If target dates changed, treat as fresh start (ignore previous availability)
-      const hadAvailability = targetDatesChanged
-        ? false
-        : (previousState?.has ?? false);
+      const hadAvailability = targetDatesChanged ? false : (state?.has ?? false);
 
       // Step 5: Determine if notification is needed
       // Only notify when state changes from false to true
@@ -120,16 +137,21 @@ export const watchScheduler = onSchedule(
         const accessToken = lineChannelAccessToken.value();
         const targetUrl = getTargetUrl();
 
-        // Format dates for message
+        // Format dates and time slots for message
         let dateInfo = "";
-        if (availableDates.length > 0) {
-          const formattedDates = availableDates
-            .map((d) => {
-              const [year, month, day] = d.split("-");
-              return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
-            })
-            .join("\n");
-          dateInfo = `以下の日程で空きが見つかりました！\n${formattedDates}\n\n`;
+        if (availableSlotsMap.size > 0) {
+          const formattedEntries: string[] = [];
+          for (const [date, slots] of availableSlotsMap) {
+            const [year, month, day] = date.split("-");
+            const dateStr = `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
+            if (slots.length > 0) {
+              // Include time slots
+              formattedEntries.push(`${dateStr}\n  ${slots.join(", ")}`);
+            } else {
+              formattedEntries.push(dateStr);
+            }
+          }
+          dateInfo = `以下の日程で空きが見つかりました！\n\n${formattedEntries.join("\n\n")}\n\n`;
         } else {
           dateInfo = "空きが見つかりました！\n\n";
         }

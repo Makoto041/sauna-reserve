@@ -1,7 +1,8 @@
 /**
  * Watch Scheduler Handler
  *
- * Runs every 2 minutes to check availability and send notifications.
+ * Runs every 1 minute to check availability and send notifications.
+ * Uses intervalMinutes setting from Firestore to control actual check frequency.
  * Respects the enabled flag to minimize unnecessary API calls.
  */
 
@@ -22,11 +23,12 @@ import {
 const lineChannelAccessToken = defineSecret("LINE_CHANNEL_ACCESS_TOKEN");
 
 /**
- * Scheduled function that runs every 2 minutes.
+ * Scheduled function that runs every 1 minute.
+ * The actual check interval is controlled by intervalMinutes in Firestore.
  */
 export const watchScheduler = onSchedule(
   {
-    schedule: "every 2 minutes",
+    schedule: "every 1 minutes",
     timeZone: "Asia/Tokyo",
     secrets: [lineChannelAccessToken],
     region: "asia-northeast1",
@@ -42,6 +44,23 @@ export const watchScheduler = onSchedule(
       if (!config?.enabled) {
         logger.info("Monitoring is disabled, skipping check");
         return;
+      }
+
+      // Step 1.5: Check if enough time has passed since last check (dynamic interval)
+      const intervalMinutes = config.intervalMinutes ?? 2;
+      const state = await getWatchState();
+      if (state?.checkedAt) {
+        const elapsedMinutes = (startTime - state.checkedAt) / (1000 * 60);
+        logger.info("Interval check", {
+          elapsedMinutes: Math.round(elapsedMinutes * 10) / 10,
+          intervalMinutes,
+          threshold: intervalMinutes - 0.5,
+        });
+        if (elapsedMinutes < intervalMinutes - 0.5) {
+          // Allow 30 seconds tolerance
+          logger.info("Skipping check, interval not reached");
+          return;
+        }
       }
 
       // Step 2: Get target user
@@ -89,9 +108,8 @@ export const watchScheduler = onSchedule(
         logger.info("Availability check result (all dates)", { hasAvailability });
       }
 
-      // Step 4: Get previous state and check if target dates changed
-      const previousState = await getWatchState();
-      const previousTargetDates = previousState?.checkedTargetDates ?? [];
+      // Step 4: Check if target dates changed (reuse state from Step 1.5)
+      const previousTargetDates = state?.checkedTargetDates ?? [];
       const currentTargetDates = targetDates ?? [];
 
       // Normalize for comparison (sort and stringify)
@@ -107,9 +125,7 @@ export const watchScheduler = onSchedule(
       }
 
       // If target dates changed, treat as fresh start (ignore previous availability)
-      const hadAvailability = targetDatesChanged
-        ? false
-        : (previousState?.has ?? false);
+      const hadAvailability = targetDatesChanged ? false : (state?.has ?? false);
 
       // Step 5: Determine if notification is needed
       // Only notify when state changes from false to true

@@ -90,6 +90,23 @@ export function parseMultipleDates(input: string, today: string): string[] {
 }
 
 /**
+ * Commands that change the shared watch configuration.
+ *
+ * The rich menu is the default for every user of the channel, so these are now
+ * one tap away for anyone who adds the bot — while line/target holds a single
+ * recipient. The webhook refuses them when someone else is registered.
+ */
+export const MUTATING_COMMANDS: ReadonlySet<Command["kind"]> = new Set([
+  "start",
+  "stop",
+  "add",
+  "del",
+  "clear",
+  "interval",
+  "night",
+]);
+
+/**
  * Splits requested dates into ones still worth monitoring and ones already
  * gone. An explicit year ("2020/1/1") or a date picker built on an earlier day
  * can both hand us a past date, which the scheduler would only prune later.

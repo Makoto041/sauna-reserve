@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  MUTATING_COMMANDS,
   parseDate,
   splitPastDates,
   parseMultipleDates,
@@ -192,5 +193,32 @@ describe("splitPastDates", () => {
       future: [],
       past: ["2026-08-21"],
     });
+  });
+});
+
+describe("MUTATING_COMMANDS", () => {
+  it("covers every command that writes to watch/config", () => {
+    expect([...MUTATING_COMMANDS].sort()).toEqual([
+      "add",
+      "clear",
+      "del",
+      "interval",
+      "night",
+      "start",
+      "stop",
+    ]);
+  });
+
+  it("leaves read-only commands open to anyone", () => {
+    // Showing state or help cannot affect the registered user, and blocking
+    // them would leave a second person with no way to understand the bot.
+    for (const kind of ["status", "help", "delmenu", "unknown", "badDate"]) {
+      expect(MUTATING_COMMANDS.has(kind as never)).toBe(false);
+    }
+  });
+
+  it("does not block registration, which is the deliberate takeover path", () => {
+    expect(MUTATING_COMMANDS.has("register")).toBe(false);
+    expect(MUTATING_COMMANDS.has("follow")).toBe(false);
   });
 });

@@ -40,6 +40,7 @@ import {
   todayJST,
   resolveCommand,
   splitPastDates,
+  MUTATING_COMMANDS,
   MIN_INTERVAL_MINUTES,
   MAX_INTERVAL_MINUTES,
   type Command,
@@ -72,6 +73,26 @@ async function execute(
   userId: string,
   today: string
 ): Promise<LineMessage[]> {
+  if (MUTATING_COMMANDS.has(command.kind)) {
+    const owner = await getLineTarget();
+    if (owner?.userId && owner.userId !== userId) {
+      logger.info("Refused a config change from a non-owner", {
+        userId,
+        kind: command.kind,
+      });
+      const config = await getWatchConfig();
+      return [
+        textReply(
+          "この監視は別のユーザーが設定しています。\n\n" +
+            "自分の通知として使う場合は「登録」と送ってください。\n" +
+            "（通知先が自分に切り替わり、設定を変更できるようになります）",
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+  }
+
   switch (command.kind) {
     case "follow": {
       // Auto-registering on follow is convenient, but line/target holds a

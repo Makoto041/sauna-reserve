@@ -290,6 +290,18 @@ npm test
 npm run test:watch
 ```
 
+### LINEメッセージの検証
+
+Flex Message の妥当性を最終的に判断するのはLINEサーバーです。不正なペイロードは
+返信なら「エラーが発生しました」、Pushなら無反応として表面化します。
+メッセージを変更したら、送信せずに検証できるスクリプトを通してください。
+
+```bash
+npm --prefix functions run build
+LINE_CHANNEL_ACCESS_TOKEN="$(firebase functions:secrets:access LINE_CHANNEL_ACCESS_TOKEN)" \
+  node scripts/validate-messages.mjs
+```
+
 ---
 
 ## Firestoreスキーマ

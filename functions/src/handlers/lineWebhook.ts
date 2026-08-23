@@ -32,6 +32,7 @@ import {
   decodePostback,
   statusMessage,
   helpMessage,
+  welcomeMessage,
   deletePickerMessage,
   textReply,
   formatLongJa,
@@ -95,17 +96,9 @@ async function execute(
 
     case "register": {
       await setLineTarget(userId);
-      const config = await ensureWatchConfig();
+      await ensureWatchConfig();
       logger.info("User registered", { userId });
-      return [
-        textReply(
-          "登録が完了しました。\n\n" +
-            "下のボタンで操作できます。\n" +
-            "「📅 日付を追加」で監視したい日を選び、「▶️ 開始」を押すと監視が始まります。",
-          config.enabled,
-          today
-        ),
-      ];
+      return [welcomeMessage(today)];
     }
 
     case "start": {
@@ -254,13 +247,15 @@ async function execute(
     }
 
     case "unknown": {
+      // Someone who types something unexpected is usually lost rather than
+      // mistyping a command, so answer with the guide instead of an error.
       const config = await getWatchConfig();
       return [
-        textReply(
-          "コマンドが認識できませんでした。\n下のボタンから操作するか、「使い方」と送ってください。",
-          config?.enabled ?? false,
-          today
-        ),
+        {
+          type: "text",
+          text: "うまく読み取れませんでした。使い方を出しますね。",
+        },
+        helpMessage(config?.enabled ?? false),
       ];
     }
   }

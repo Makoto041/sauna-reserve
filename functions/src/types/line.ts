@@ -119,6 +119,7 @@ export interface FlexBox {
   alignItems?: "flex-start" | "center" | "flex-end";
   justifyContent?: string;
   flex?: number;
+  width?: string;
 }
 
 export type FlexComponent =

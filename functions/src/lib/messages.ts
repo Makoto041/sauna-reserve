@@ -632,6 +632,120 @@ export function monitoringStoppedMessage(expired: string[]): LineFlexMessage {
 }
 
 /* ------------------------------------------------------------------ *
+ * Onboarding
+ * ------------------------------------------------------------------ */
+
+/** "① 行きたい日を選ぶ" — a numbered step with its explanation underneath. */
+function stepRow(number: string, title: string, detail: string): FlexBox {
+  return {
+    type: "box",
+    layout: "horizontal",
+    spacing: "md",
+    contents: [
+      {
+        type: "box",
+        layout: "vertical",
+        flex: 0,
+        width: "28px",
+        contents: [
+          {
+            type: "text",
+            text: number,
+            size: "lg",
+            weight: "bold",
+            color: COLOR_ACCENT,
+            align: "center",
+          },
+        ],
+      },
+      {
+        type: "box",
+        layout: "vertical",
+        contents: [
+          { type: "text", text: title, size: "sm", weight: "bold", wrap: true },
+          {
+            type: "text",
+            text: detail,
+            size: "xs",
+            color: COLOR_MUTED,
+            wrap: true,
+          },
+        ],
+      },
+    ],
+  };
+}
+
+const STEPS: Array<[string, string, string]> = [
+  ["1", "行きたい日を選ぶ", "「日付を追加」でカレンダーから選びます。何日でも登録できます。"],
+  ["2", "「監視開始」を押す", "予約ページを定期的に見に行きはじめます。"],
+  ["3", "通知を待つ", "空きが出たら、時間帯と残席つきでお知らせします。"],
+];
+
+/**
+ * Builds the first message a new user sees. Everything they need to get going
+ * is on this one card, in order, with the first action as a button.
+ */
+export function welcomeMessage(today: string = todayJST()): LineFlexMessage {
+  return {
+    type: "flex",
+    altText: "【はじめかた】日付を選んで「監視開始」を押すと、空きが出たときにお知らせします",
+    contents: {
+      type: "bubble",
+      header: header("はじめかた", "サウナ空き監視", COLOR_ACCENT),
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "lg",
+        paddingAll: "16px",
+        contents: [
+          {
+            type: "text",
+            text: "予約ページに空きが出たらLINEでお知らせします。3ステップで始められます。",
+            size: "sm",
+            color: COLOR_TEXT,
+            wrap: true,
+          },
+          ...STEPS.map(([number, title, detail]) =>
+            stepRow(number, title, detail)
+          ),
+          { type: "separator" },
+          {
+            type: "text",
+            text: "操作はすべてボタンでできます。画面下の「メニュー」からいつでも開けます。",
+            size: "xs",
+            color: COLOR_MUTED,
+            wrap: true,
+          },
+        ],
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        paddingAll: "12px",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: COLOR_ACCENT,
+            action: datePickerAction("まず日付を選ぶ", today),
+          },
+          {
+            type: "button",
+            style: "link",
+            height: "sm",
+            action: postbackAction("くわしい使い方", { action: "help" }, "使い方"),
+          },
+        ],
+      },
+    },
+    quickReply: mainQuickReply(false, today),
+  };
+}
+
+/* ------------------------------------------------------------------ *
  * Help
  * ------------------------------------------------------------------ */
 
@@ -648,24 +762,41 @@ function helpSection(title: string, lines: string[]): FlexComponent[] {
   ];
 }
 
-/** Builds the 使い方 bubble. */
+/**
+ * Builds the 使い方 bubble: the three steps first, then the full command list
+ * for people who would rather type.
+ */
 export function helpMessage(enabled: boolean): LineFlexMessage {
   const body: FlexComponent[] = [
     {
       type: "text",
-      text: "下のボタンからすべて操作できます。キーワード送信にも対応しています。",
+      text: "画面下の「メニュー」と、メッセージの下に出るボタンから、すべて操作できます。",
       size: "sm",
+      color: COLOR_TEXT,
+      wrap: true,
+    },
+    { type: "text", text: "使いはじめ", size: "sm", weight: "bold", margin: "lg" },
+    ...STEPS.map(([number, title, detail]) => stepRow(number, title, detail)),
+    { type: "separator", margin: "lg" },
+    {
+      type: "text",
+      text: "キーワードを送っても同じ操作ができます。",
+      size: "xs",
       color: COLOR_MUTED,
       wrap: true,
+      margin: "lg",
     },
     ...helpSection("監視の開始・停止", ["「開始」/「停止」"]),
     ...helpSection("監視日", [
-      "「📅 日付を追加」でカレンダーから選択",
       "「1/15」「1/2 1/3 1/4」で直接入力",
-      "「削除 1/15」/「全削除」",
+      "「削除」で一覧から選んで削除",
+      "「全削除」で日付指定をやめる",
     ]),
     ...helpSection("監視間隔", ["「5分」（1〜60分）"]),
-    ...helpSection("その他", ["「状態」で現在の設定を表示"]),
+    ...helpSection("その他", [
+      "「状態」で現在の設定を表示",
+      "「夜間停止」/「24時間監視」で夜間の扱いを切替",
+    ]),
   ];
 
   return {

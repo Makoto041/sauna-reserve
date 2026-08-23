@@ -143,6 +143,25 @@ describe("resolveCommand", () => {
     expect(resolveCommand("こんにちは", TODAY)).toEqual({ kind: "unknown" });
   });
 
+  it("treats the things a stuck user actually types as a help request", () => {
+    for (const text of [
+      "使い方",
+      "ヘルプ",
+      "メニュー",
+      "menu",
+      "はじめて",
+      "初めて",
+      "わからない",
+      "分からない",
+      "わかりません",
+      "教えて",
+      "?",
+      "？",
+    ]) {
+      expect(resolveCommand(text, TODAY)).toEqual({ kind: "help" });
+    }
+  });
+
   it("does not resolve keywords through the prototype chain", () => {
     // A bare object lookup returns Object.prototype members here, which then
     // fall through execute() as a command with no kind.

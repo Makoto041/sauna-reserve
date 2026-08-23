@@ -17,6 +17,7 @@ import {
   monitoringStoppedMessage,
   statusMessage,
   textReply,
+  welcomeMessage,
 } from "../src/lib/messages.js";
 
 const TODAY = "2026-08-22";
@@ -332,10 +333,45 @@ describe("monitoringStoppedMessage", () => {
   });
 });
 
+describe("welcomeMessage", () => {
+  const message = welcomeMessage(TODAY);
+
+  it("walks a first-time user through the three steps in order", () => {
+    const rendered = JSON.stringify(message);
+    for (const step of ["行きたい日を選ぶ", "「監視開始」を押す", "通知を待つ"]) {
+      expect(rendered).toContain(step);
+    }
+    expect(rendered.indexOf("行きたい日を選ぶ")).toBeLessThan(
+      rendered.indexOf("通知を待つ")
+    );
+  });
+
+  it("leads with the date picker, which is the first thing to do", () => {
+    const actions = collectActions(message.contents);
+    expect(actions[0]).toMatchObject({ type: "datetimepicker" });
+  });
+
+  it("points at the rich menu so the buttons are findable later", () => {
+    expect(JSON.stringify(message)).toContain("メニュー");
+  });
+
+  it("says what the bot does in the altText, for the notification preview", () => {
+    expect(message.altText).toContain("空き");
+    expectValidMessage(message);
+  });
+});
+
 describe("helpMessage", () => {
   it("is a valid flex message with the control strip attached", () => {
     const message: LineFlexMessage = helpMessage(false);
     expect(message.quickReply?.items.length).toBeGreaterThan(0);
     expectValidMessage(message);
+  });
+
+  it("leads with the steps before the keyword list", () => {
+    const rendered = JSON.stringify(helpMessage(false));
+    expect(rendered.indexOf("使いはじめ")).toBeLessThan(
+      rendered.indexOf("キーワードを送っても")
+    );
   });
 });

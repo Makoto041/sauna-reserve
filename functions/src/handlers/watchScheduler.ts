@@ -23,7 +23,10 @@ import {
   availabilityNotification,
   monitoringStoppedMessage,
   splitPastDates,
-  datesToRemember,
+  slotKey,
+  dateOfSlotKey,
+  datesOfSlots,
+  slotsToRemember,
   DEFAULT_INTERVAL_MINUTES,
   jstHour,
   todayJST,
@@ -157,10 +160,10 @@ export const watchScheduler = onSchedule(
         return;
       }
 
-      // Step 7: work out what is newly available.
+      // Step 7: work out what is newly open, slot by slot.
       // Windows that failed to load keep their previous value so a transient
       // error cannot trigger a duplicate notification once the site recovers.
-      const previouslyAvailable = previousState?.availableDates ?? [];
+      const previousSlots = previousState?.availableSlots ?? [];
       const checked = new Set(Object.keys(report.byDate));
       const unresolved =
         targetDates.length > 0
@@ -170,19 +173,19 @@ export const watchScheduler = onSchedule(
           : [];
 
       const availableNow = [
-        ...Object.entries(report.byDate)
-          .filter(([, slots]) => slots.length > 0)
-          .map(([date]) => date),
-        ...previouslyAvailable.filter((date) => unresolved.includes(date)),
+        ...Object.entries(report.byDate).flatMap(([date, slots]) =>
+          slots.map((slot) => slotKey(date, slot))
+        ),
+        ...previousSlots.filter((key) =>
+          unresolved.includes(dateOfSlotKey(key))
+        ),
       ].sort();
 
-      // State written by the previous version has no availableDates, only a
-      // global `has`, so it cannot say which dates were announced. We let the
-      // first run after deploy re-announce whatever is open rather than
-      // suppress it: one duplicate message costs less than a missed slot.
-      const newlyAvailable = availableNow.filter(
-        (date) => !previouslyAvailable.includes(date)
-      );
+      // A state document from before slot-level tracking cannot say which
+      // slots were announced, so everything open counts as new. That re-sends
+      // the current openings once, which beats staying quiet about them.
+      const knownSlots = new Set(previousSlots);
+      const newlyAvailable = availableNow.filter((key) => !knownSlots.has(key));
 
       logger.info("Availability check result", {
         checkedDates: targetDates.length || "current-week",
@@ -191,13 +194,18 @@ export const watchScheduler = onSchedule(
         newlyAvailable,
       });
 
-      // Step 8: notify only on a false -> true transition, per date.
+      // Step 8: notify only about slots that just opened.
       let notified = false;
       if (newlyAvailable.length > 0) {
-        const hits: AvailabilityHit[] = newlyAvailable.map((date) => ({
-          date,
-          slots: report.byDate[date] ?? [],
-        }));
+        const newKeys = new Set(newlyAvailable);
+        const hits: AvailabilityHit[] = datesOfSlots(newlyAvailable).map(
+          (date) => ({
+            date,
+            slots: (report.byDate[date] ?? []).filter((slot) =>
+              newKeys.has(slotKey(date, slot))
+            ),
+          })
+        );
         try {
           await pushMessage(
             accessToken,
@@ -205,9 +213,9 @@ export const watchScheduler = onSchedule(
             availabilityNotification(hits)
           );
           notified = true;
-          logger.info("Notification sent", { dates: newlyAvailable });
+          logger.info("Notification sent", { slots: newlyAvailable });
         } catch (err) {
-          // The dates stay unrecorded below, so the next tick tries again.
+          // The slots stay unrecorded below, so the next tick tries again.
           logger.error("Failed to send notification", {
             error: err instanceof Error ? err.message : String(err),
           });
@@ -215,9 +223,9 @@ export const watchScheduler = onSchedule(
       }
 
       // Step 9: always record the check, so a failing site is not hammered.
-      // Dates whose push failed are left out so they are retried next tick.
+      // Slots whose push failed are left out so they are retried next tick.
       await updateWatchState(
-        datesToRemember(availableNow, newlyAvailable, notified),
+        slotsToRemember(availableNow, newlyAvailable, notified),
         notified,
         previousState?.lastNotifiedAt
       );

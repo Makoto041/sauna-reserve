@@ -1,0 +1,19 @@
+# Dependencies
+node_modules/
+
+# Build output
+functions/lib/
+*.tsbuildinfo
+
+# Firebase
+.firebase/
+firebase-debug.log
+firebase-debug.*.log
+.runtimeconfig.json
+*.local
+
+# Test output
+coverage/
+
+# Editor / OS
+.DS_Store

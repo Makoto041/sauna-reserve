@@ -23,6 +23,7 @@ import {
   availabilityNotification,
   monitoringStoppedMessage,
   splitPastDates,
+  datesToRemember,
   DEFAULT_INTERVAL_MINUTES,
   jstHour,
   todayJST,
@@ -175,24 +176,13 @@ export const watchScheduler = onSchedule(
         ...previouslyAvailable.filter((date) => unresolved.includes(date)),
       ].sort();
 
-      // Schema migration: state written by the previous version has no
-      // availableDates, only a global `has`. When that said availability was
-      // present the user has already been notified about it, so seed the
-      // per-date state on this first run instead of announcing it again.
-      const legacyAlreadyNotified =
-        previousState !== null &&
-        previousState.availableDates === undefined &&
-        previousState.has === true;
-
-      const newlyAvailable = legacyAlreadyNotified
-        ? []
-        : availableNow.filter((date) => !previouslyAvailable.includes(date));
-
-      if (legacyAlreadyNotified) {
-        logger.info("Seeding per-date state from legacy state document", {
-          availableNow,
-        });
-      }
+      // State written by the previous version has no availableDates, only a
+      // global `has`, so it cannot say which dates were announced. We let the
+      // first run after deploy re-announce whatever is open rather than
+      // suppress it: one duplicate message costs less than a missed slot.
+      const newlyAvailable = availableNow.filter(
+        (date) => !previouslyAvailable.includes(date)
+      );
 
       logger.info("Availability check result", {
         checkedDates: targetDates.length || "current-week",
@@ -217,7 +207,7 @@ export const watchScheduler = onSchedule(
           notified = true;
           logger.info("Notification sent", { dates: newlyAvailable });
         } catch (err) {
-          // State is still recorded below; the next transition will retry.
+          // The dates stay unrecorded below, so the next tick tries again.
           logger.error("Failed to send notification", {
             error: err instanceof Error ? err.message : String(err),
           });
@@ -225,8 +215,9 @@ export const watchScheduler = onSchedule(
       }
 
       // Step 9: always record the check, so a failing site is not hammered.
+      // Dates whose push failed are left out so they are retried next tick.
       await updateWatchState(
-        availableNow,
+        datesToRemember(availableNow, newlyAvailable, notified),
         notified,
         previousState?.lastNotifiedAt
       );

@@ -113,6 +113,8 @@ export function splitPastDates(
 
 export type Command =
   | { kind: "register" }
+  /** Produced by the follow event, never by resolveCommand. */
+  | { kind: "follow" }
   | { kind: "start" }
   | { kind: "stop" }
   | { kind: "status" }
@@ -155,9 +157,11 @@ const KEYWORDS: Record<string, Command> = {
  * @param today - Today's date in JST
  */
 export function resolveCommand(rawText: string, today: string): Command {
-  const keyword = KEYWORDS[rawText.toLowerCase()];
-  if (keyword) {
-    return keyword;
+  // hasOwn, not a bare lookup: "constructor" and "__proto__" would otherwise
+  // resolve through the prototype chain into a bogus command object.
+  const key = rawText.toLowerCase();
+  if (Object.hasOwn(KEYWORDS, key)) {
+    return KEYWORDS[key];
   }
 
   const interval = rawText.match(

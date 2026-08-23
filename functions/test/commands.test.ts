@@ -142,6 +142,14 @@ describe("resolveCommand", () => {
   it("falls through to unknown for free text", () => {
     expect(resolveCommand("こんにちは", TODAY)).toEqual({ kind: "unknown" });
   });
+
+  it("does not resolve keywords through the prototype chain", () => {
+    // A bare object lookup returns Object.prototype members here, which then
+    // fall through execute() as a command with no kind.
+    for (const text of ["constructor", "__proto__", "toString", "valueOf"]) {
+      expect(resolveCommand(text, TODAY)).toEqual({ kind: "unknown" });
+    }
+  });
 });
 
 describe("splitPastDates", () => {

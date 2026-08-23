@@ -18,6 +18,7 @@ import {
   verifySignature,
   replyMessage,
   setLineTarget,
+  getLineTarget,
   setWatchEnabled,
   setIntervalMinutes,
   setNightPause,
@@ -71,6 +72,27 @@ async function execute(
   today: string
 ): Promise<LineMessage[]> {
   switch (command.kind) {
+    case "follow": {
+      // Auto-registering on follow is convenient, but line/target holds a
+      // single recipient: without this guard anyone who finds the account
+      // would silently take over the previous user's notifications.
+      const existing = await getLineTarget();
+      if (existing?.userId && existing.userId !== userId) {
+        const config = await getWatchConfig();
+        logger.info("Follow ignored, another user is registered", { userId });
+        return [
+          textReply(
+            "友だち追加ありがとうございます。\n\n" +
+              "このボットは既に別のユーザーが通知先として登録されています。\n" +
+              "自分に切り替える場合は「登録」と送ってください。",
+            config?.enabled ?? false,
+            today
+          ),
+        ];
+      }
+      return execute({ kind: "register" }, userId, today);
+    }
+
     case "register": {
       await setLineTarget(userId);
       const config = await ensureWatchConfig();
@@ -172,8 +194,12 @@ async function execute(
         date: command.date,
         removed,
       });
+      const emptied =
+        removed && remaining === 0
+          ? "\n\n監視日が0件になりました。\nこのままだと今週表示ぶんの全日程が監視対象になります。"
+          : "";
       const text = removed
-        ? `${formatLongJa(command.date)} を監視対象から削除しました。\n\n残りの監視日: ${remaining}件`
+        ? `${formatLongJa(command.date)} を監視対象から削除しました。\n\n残りの監視日: ${remaining}件${emptied}`
         : `${formatLongJa(command.date)} は監視対象に含まれていません。`;
       return [textReply(text, config?.enabled ?? false, today)];
     }
@@ -305,7 +331,7 @@ async function processEvent(
 
   let command: Command;
   if (event.type === "follow") {
-    command = { kind: "register" };
+    command = { kind: "follow" };
   } else if (event.type === "postback") {
     command = commandFromPostback(event);
   } else if (event.type === "message" && event.message?.type === "text") {

@@ -1,146 +1,310 @@
 /**
  * LINE Webhook Handler
  *
- * Handles:
- * - "start" command: Register user for notifications
- * - "on" command: Enable monitoring
- * - "off" command: Disable monitoring
- * - "status" command: Show current status
- * - Date commands: Set target date for monitoring (e.g., "1/15", "2025-01-15")
- * - "clear" command: Clear target date
+ * Every action is available both as a tappable button (postback / date picker
+ * / quick reply) and as a typed keyword, so the bot works the same whether the
+ * user taps or types.
  */
 
 import { onRequest } from "firebase-functions/v2/https";
 import { defineSecret } from "firebase-functions/params";
 import { logger } from "firebase-functions/v2";
-import type { LineWebhookBody, LineEvent } from "../types/index.js";
+import type {
+  LineWebhookBody,
+  LineEvent,
+  LineMessage,
+} from "../types/index.js";
 import {
   verifySignature,
   replyMessage,
   setLineTarget,
+  getLineTarget,
   setWatchEnabled,
   setIntervalMinutes,
-  addTargetDate,
+  setNightPause,
+  addTargetDates,
   removeTargetDate,
   clearTargetDates,
   getWatchConfig,
   getWatchState,
   ensureWatchConfig,
+  DEFAULT_INTERVAL_MINUTES,
+  decodePostback,
+  statusMessage,
+  helpMessage,
+  deletePickerMessage,
+  textReply,
+  formatLongJa,
+  formatTimestampJST,
+  todayJST,
+  resolveCommand,
+  splitPastDates,
+  MIN_INTERVAL_MINUTES,
+  MAX_INTERVAL_MINUTES,
+  type Command,
 } from "../lib/index.js";
 
-/**
- * Parses various date formats and returns YYYY-MM-DD format.
- * Supports:
- * - "1/15" or "01/15" (assumes current year)
- * - "2025/1/15" or "2025/01/15"
- * - "1-15" or "01-15" (assumes current year)
- * - "2025-1-15" or "2025-01-15"
- *
- * @returns YYYY-MM-DD string or null if invalid
- */
-function parseDate(input: string): string | null {
-  const trimmed = input.trim();
+/* ------------------------------------------------------------------ *
+ * Command execution
+ * ------------------------------------------------------------------ */
 
-  // Try MM/DD or M/D format (current year)
-  const shortSlash = /^(\d{1,2})\/(\d{1,2})$/;
-  const shortSlashMatch = trimmed.match(shortSlash);
-  if (shortSlashMatch) {
-    const month = parseInt(shortSlashMatch[1], 10);
-    const day = parseInt(shortSlashMatch[2], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const year = new Date().getFullYear();
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-
-  // Try YYYY/MM/DD format
-  const longSlash = /^(\d{4})\/(\d{1,2})\/(\d{1,2})$/;
-  const longSlashMatch = trimmed.match(longSlash);
-  if (longSlashMatch) {
-    const year = parseInt(longSlashMatch[1], 10);
-    const month = parseInt(longSlashMatch[2], 10);
-    const day = parseInt(longSlashMatch[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-
-  // Try MM-DD or M-D format (current year)
-  const shortDash = /^(\d{1,2})-(\d{1,2})$/;
-  const shortDashMatch = trimmed.match(shortDash);
-  if (shortDashMatch) {
-    const month = parseInt(shortDashMatch[1], 10);
-    const day = parseInt(shortDashMatch[2], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      const year = new Date().getFullYear();
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-
-  // Try YYYY-MM-DD format
-  const longDash = /^(\d{4})-(\d{1,2})-(\d{1,2})$/;
-  const longDashMatch = trimmed.match(longDash);
-  if (longDashMatch) {
-    const year = parseInt(longDashMatch[1], 10);
-    const month = parseInt(longDashMatch[2], 10);
-    const day = parseInt(longDashMatch[3], 10);
-    if (month >= 1 && month <= 12 && day >= 1 && day <= 31) {
-      return `${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
-    }
-  }
-
-  return null;
+async function buildStatusMessage(): Promise<LineMessage> {
+  const [config, state] = await Promise.all([getWatchConfig(), getWatchState()]);
+  return statusMessage({
+    enabled: config?.enabled ?? false,
+    intervalMinutes: config?.intervalMinutes ?? DEFAULT_INTERVAL_MINUTES,
+    nightPause: config?.nightPause ?? true,
+    targetDates: [...(config?.targetDates ?? [])].sort(),
+    availableDates: state?.availableDates ?? [],
+    checkedAtText: state?.checkedAt
+      ? formatTimestampJST(state.checkedAt)
+      : undefined,
+    lastNotifiedAtText: state?.lastNotifiedAt
+      ? formatTimestampJST(state.lastNotifiedAt)
+      : undefined,
+  });
 }
 
-/**
- * Formats a date string for display.
- */
-function formatDateForDisplay(dateStr: string): string {
-  const [year, month, day] = dateStr.split("-");
-  return `${year}年${parseInt(month, 10)}月${parseInt(day, 10)}日`;
-}
+/** Runs a command and returns the messages to reply with. */
+async function execute(
+  command: Command,
+  userId: string,
+  today: string
+): Promise<LineMessage[]> {
+  switch (command.kind) {
+    case "follow": {
+      // Auto-registering on follow is convenient, but line/target holds a
+      // single recipient: without this guard anyone who finds the account
+      // would silently take over the previous user's notifications.
+      const existing = await getLineTarget();
+      if (existing?.userId && existing.userId !== userId) {
+        const config = await getWatchConfig();
+        logger.info("Follow ignored, another user is registered", { userId });
+        return [
+          textReply(
+            "友だち追加ありがとうございます。\n\n" +
+              "このボットは既に別のユーザーが通知先として登録されています。\n" +
+              "自分に切り替える場合は「登録」と送ってください。",
+            config?.enabled ?? false,
+            today
+          ),
+        ];
+      }
+      return execute({ kind: "register" }, userId, today);
+    }
 
-/**
- * Formats multiple dates for display.
- */
-function formatDatesForDisplay(dates: string[]): string {
-  return dates.map(formatDateForDisplay).join("\n");
-}
+    case "register": {
+      await setLineTarget(userId);
+      const config = await ensureWatchConfig();
+      logger.info("User registered", { userId });
+      return [
+        textReply(
+          "登録が完了しました。\n\n" +
+            "下のボタンで操作できます。\n" +
+            "「📅 日付を追加」で監視したい日を選び、「▶️ 開始」を押すと監視が始まります。",
+          config.enabled,
+          today
+        ),
+      ];
+    }
 
-/**
- * Formats a timestamp to JST date/time string.
- * @param timestamp - Unix timestamp in milliseconds
- * @returns Formatted string like "1/2 18:30"
- */
-function formatTimestampJST(timestamp: number): string {
-  // Convert to JST (UTC+9)
-  const jstOffset = 9 * 60 * 60 * 1000;
-  const jstDate = new Date(timestamp + jstOffset);
-  const month = jstDate.getUTCMonth() + 1;
-  const day = jstDate.getUTCDate();
-  const hours = String(jstDate.getUTCHours()).padStart(2, "0");
-  const minutes = String(jstDate.getUTCMinutes()).padStart(2, "0");
-  return `${month}/${day} ${hours}:${minutes}`;
-}
+    case "start": {
+      await ensureWatchConfig();
+      await setWatchEnabled(true);
+      logger.info("Monitoring enabled", { userId });
+      return [await buildStatusMessage()];
+    }
 
-/**
- * Parses multiple dates from input (space or comma separated).
- * Example: "1/2 1/3" or "1/2, 1/3" or "1/2　1/3" (full-width space)
- * @returns Array of YYYY-MM-DD strings (only valid dates)
- */
-function parseMultipleDates(input: string): string[] {
-  // Split by space (half-width or full-width) or comma
-  const parts = input.split(/[\s,、　]+/).filter((p) => p.length > 0);
-  const dates: string[] = [];
+    case "stop": {
+      await ensureWatchConfig();
+      await setWatchEnabled(false);
+      logger.info("Monitoring disabled", { userId });
+      return [await buildStatusMessage()];
+    }
 
-  for (const part of parts) {
-    const parsed = parseDate(part);
-    if (parsed && !dates.includes(parsed)) {
-      dates.push(parsed);
+    case "status":
+      return [await buildStatusMessage()];
+
+    case "help": {
+      const config = await getWatchConfig();
+      return [helpMessage(config?.enabled ?? false)];
+    }
+
+    case "add": {
+      // Explicit years ("2020/1/1") and stale date pickers can both carry a
+      // past date, which the next tick would prune - and, if it were the only
+      // date, silently stop monitoring.
+      const { future: dates, past } = splitPastDates(command.dates, today);
+      const config = await getWatchConfig();
+
+      if (dates.length === 0) {
+        return [
+          textReply(
+            `過去の日付は追加できません。\n${past.map(formatLongJa).join("\n")}`,
+            config?.enabled ?? false,
+            today
+          ),
+        ];
+      }
+
+      const all = await addTargetDates(dates);
+      logger.info("Target dates added", { userId, dates, skipped: past });
+      const added =
+        dates.length === 1
+          ? `${formatLongJa(dates[0])} を監視対象に追加しました。`
+          : `${dates.length}件を監視対象に追加しました。\n` +
+            dates.map(formatLongJa).join("\n");
+      const skipped =
+        past.length > 0
+          ? `\n\n過去の日付は追加していません:\n${past.map(formatLongJa).join("\n")}`
+          : "";
+      const hint = config?.enabled
+        ? ""
+        : "\n\n「▶️ 開始」を押すと監視を始めます。";
+      return [
+        textReply(
+          `${added}${skipped}\n\n現在の監視日: ${all.length}件${hint}`,
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+
+    case "delmenu": {
+      const config = await getWatchConfig();
+      const dates = [...(config?.targetDates ?? [])].sort();
+      if (dates.length === 0) {
+        return [
+          textReply(
+            "監視中の日付はありません。",
+            config?.enabled ?? false,
+            today
+          ),
+        ];
+      }
+      return [deletePickerMessage(dates)];
+    }
+
+    case "del": {
+      const removed = await removeTargetDate(command.date);
+      const config = await getWatchConfig();
+      const remaining = config?.targetDates?.length ?? 0;
+      logger.info("Target date removal", {
+        userId,
+        date: command.date,
+        removed,
+      });
+      const emptied =
+        removed && remaining === 0
+          ? "\n\n監視日が0件になりました。\nこのままだと今週表示ぶんの全日程が監視対象になります。"
+          : "";
+      const text = removed
+        ? `${formatLongJa(command.date)} を監視対象から削除しました。\n\n残りの監視日: ${remaining}件${emptied}`
+        : `${formatLongJa(command.date)} は監視対象に含まれていません。`;
+      return [textReply(text, config?.enabled ?? false, today)];
+    }
+
+    case "clear": {
+      await clearTargetDates();
+      const config = await getWatchConfig();
+      logger.info("All target dates cleared", { userId });
+      return [
+        textReply(
+          "監視日をすべて削除しました。\n今週表示ぶんの全日程が監視対象になります。",
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+
+    case "interval": {
+      await ensureWatchConfig();
+      await setIntervalMinutes(command.minutes);
+      logger.info("Interval updated", { userId, minutes: command.minutes });
+      return [await buildStatusMessage()];
+    }
+
+    case "intervalOutOfRange": {
+      const config = await getWatchConfig();
+      return [
+        textReply(
+          `監視間隔は${MIN_INTERVAL_MINUTES}〜${MAX_INTERVAL_MINUTES}分で指定してください。\n例: 「5分」「間隔 10」`,
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+
+    case "night": {
+      await ensureWatchConfig();
+      await setNightPause(command.on);
+      logger.info("Night pause updated", { userId, on: command.on });
+      return [await buildStatusMessage()];
+    }
+
+    case "badDate": {
+      const config = await getWatchConfig();
+      return [
+        textReply(
+          "日付を読み取れませんでした。\n例: 「削除 1/15」「削除 2027/1/15」\n\n「削除」だけ送ると一覧から選べます。",
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+
+    case "unknown": {
+      const config = await getWatchConfig();
+      return [
+        textReply(
+          "コマンドが認識できませんでした。\n下のボタンから操作するか、「使い方」と送ってください。",
+          config?.enabled ?? false,
+          today
+        ),
+      ];
     }
   }
+}
 
-  return dates.sort();
+/* ------------------------------------------------------------------ *
+ * Event handling
+ * ------------------------------------------------------------------ */
+
+/** Maps a postback event to a command. */
+function commandFromPostback(event: LineEvent): Command {
+  const payload = decodePostback(event.postback?.data ?? "");
+  if (!payload) {
+    return { kind: "unknown" };
+  }
+
+  switch (payload.action) {
+    case "add": {
+      // The date picker returns YYYY-MM-DD, so no year guessing is needed.
+      const date = event.postback?.params?.date;
+      return date ? { kind: "add", dates: [date] } : { kind: "badDate" };
+    }
+    case "del":
+      return { kind: "del", date: payload.date };
+    case "interval":
+      return payload.min >= MIN_INTERVAL_MINUTES &&
+        payload.min <= MAX_INTERVAL_MINUTES
+        ? { kind: "interval", minutes: payload.min }
+        : { kind: "intervalOutOfRange" };
+    case "night":
+      return { kind: "night", on: payload.on };
+    case "start":
+      return { kind: "start" };
+    case "stop":
+      return { kind: "stop" };
+    case "status":
+      return { kind: "status" };
+    case "help":
+      return { kind: "help" };
+    case "clear":
+      return { kind: "clear" };
+    case "delmenu":
+      return { kind: "delmenu" };
+  }
 }
 
 // Define secrets
@@ -154,265 +318,40 @@ async function processEvent(
   event: LineEvent,
   accessToken: string
 ): Promise<void> {
-  // Only handle text messages
-  if (event.type !== "message" || event.message?.type !== "text") {
-    logger.info("Ignoring non-text event", { type: event.type });
-    return;
-  }
-
-  const rawText = event.message.text?.trim() ?? "";
-  const text = rawText.toLowerCase();
   const userId = event.source?.userId;
   const replyToken = event.replyToken;
+  const today = todayJST();
 
   if (!userId || !replyToken) {
-    logger.warn("Missing userId or replyToken");
+    logger.info("Ignoring event without userId/replyToken", {
+      type: event.type,
+    });
     return;
   }
 
-  logger.info("Processing command", { text, userId });
+  let command: Command;
+  if (event.type === "follow") {
+    command = { kind: "follow" };
+  } else if (event.type === "postback") {
+    command = commandFromPostback(event);
+  } else if (event.type === "message" && event.message?.type === "text") {
+    command = resolveCommand(event.message.text?.trim() ?? "", today);
+  } else {
+    logger.info("Ignoring unsupported event", { type: event.type });
+    return;
+  }
+
+  logger.info("Processing command", { kind: command.kind, userId });
 
   try {
-    // Check for interval command (間隔 5 or 5分 or interval 5)
-    const intervalMatch = rawText.match(/^(?:間隔\s*|interval\s*)(\d+)$|^(\d+)分$/i);
-    if (intervalMatch) {
-      const minutes = parseInt(intervalMatch[1] || intervalMatch[2], 10);
-      if (minutes >= 1 && minutes <= 60) {
-        await setIntervalMinutes(minutes);
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `監視間隔を ${minutes}分 に設定しました。`
-        );
-        logger.info("Interval updated", { userId, intervalMinutes: minutes });
-        return;
-      } else {
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "監視間隔は1〜60分の範囲で指定してください。\n例: 「5分」「間隔 10」"
-        );
-        return;
-      }
-    }
-
-    // Check for remove date command (削除 1/15 or 削除1/15)
-    const removeMatch = rawText.match(/^削除\s*(.+)$/);
-    if (removeMatch) {
-      const parsedDate = parseDate(removeMatch[1]);
-      if (parsedDate) {
-        const removed = await removeTargetDate(parsedDate);
-        const displayDate = formatDateForDisplay(parsedDate);
-        if (removed) {
-          const config = await getWatchConfig();
-          const remaining = config?.targetDates?.length ?? 0;
-          await replyMessage(
-            accessToken,
-            replyToken,
-            `${displayDate} を監視対象から削除しました。\n\n` +
-              `残りの監視日: ${remaining}件`
-          );
-          logger.info("Target date removed", { userId, targetDate: parsedDate });
-        } else {
-          await replyMessage(
-            accessToken,
-            replyToken,
-            `${displayDate} は監視対象に含まれていません。`
-          );
-        }
-        return;
-      } else {
-        // 削除コマンドだが日付が無効な場合
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `日付の形式が正しくありません。\n\n` +
-            `例: 「削除 1/15」「削除 2025/1/15」\n` +
-            `※複数日付の一括削除はできません`
-        );
-        return;
-      }
-    }
-
-    // Check if it's a date command (add date - supports multiple dates)
-    const parsedDates = parseMultipleDates(rawText);
-    if (parsedDates.length > 0) {
-      // Add all dates
-      for (const date of parsedDates) {
-        await addTargetDate(date);
-      }
-      const config = await getWatchConfig();
-      const total = config?.targetDates?.length ?? parsedDates.length;
-
-      if (parsedDates.length === 1) {
-        const displayDate = formatDateForDisplay(parsedDates[0]);
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `${displayDate} を監視対象に追加しました。\n\n` +
-            `現在の監視日数: ${total}件\n\n` +
-            "「開始」で監視開始\n" +
-            "「状態」で一覧確認\n" +
-            "「削除 1/15」で日付を削除"
-        );
-      } else {
-        const displayDates = parsedDates.map(formatDateForDisplay).join("\n");
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `${parsedDates.length}件の日付を追加しました:\n${displayDates}\n\n` +
-            `現在の監視日数: ${total}件\n\n` +
-            "「開始」で監視開始\n" +
-            "「状態」で一覧確認"
-        );
-      }
-      logger.info("Target dates added", { userId, targetDates: parsedDates });
-      return;
-    }
-
-    switch (text) {
-      case "start":
-      case "登録": {
-        await setLineTarget(userId);
-        await ensureWatchConfig();
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "登録完了しました！\n\n" +
-            "日付を送信: 監視日を追加（例: 1/15）\n" +
-            "複数日程を追加できます\n" +
-            "「開始」で監視開始\n" +
-            "「停止」で監視停止\n" +
-            "「状態」で状態確認\n" +
-            "「使い方」で詳細を表示"
-        );
-        logger.info("User registered", { userId });
-        break;
-      }
-
-      case "on":
-      case "開始": {
-        const config = await getWatchConfig();
-        await setWatchEnabled(true);
-        const dates = config?.targetDates;
-        const dateInfo =
-          dates && dates.length > 0
-            ? `\n監視日:\n${formatDatesForDisplay(dates)}`
-            : "\n（全日程を監視）";
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `監視を開始しました。${dateInfo}\n\n空きが出たら通知します。`
-        );
-        logger.info("Monitoring enabled", { userId });
-        break;
-      }
-
-      case "off":
-      case "停止": {
-        await setWatchEnabled(false);
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "監視を停止しました。\n再開するには「開始」と送信してください。"
-        );
-        logger.info("Monitoring disabled", { userId });
-        break;
-      }
-
-      case "clear":
-      case "全削除": {
-        await clearTargetDates();
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "全ての監視日を削除しました。\n全日程を監視対象にします。"
-        );
-        logger.info("All target dates cleared", { userId });
-        break;
-      }
-
-      case "status":
-      case "状態": {
-        const config = await getWatchConfig();
-        const state = await getWatchState();
-        const statusText = config?.enabled ? "ON（監視中）" : "OFF（停止中）";
-        const dates = config?.targetDates;
-        const dateInfo =
-          dates && dates.length > 0
-            ? `監視日（${dates.length}件）:\n${formatDatesForDisplay(dates)}`
-            : "監視日: 全日程";
-
-        // Format last check time (JST)
-        let lastCheckInfo = "最終チェック: なし";
-        if (state?.checkedAt) {
-          lastCheckInfo = `最終チェック: ${formatTimestampJST(state.checkedAt)}`;
-        }
-
-        // Format last notification time (JST)
-        let lastNotifyInfo = "";
-        if (state?.lastNotifiedAt) {
-          lastNotifyInfo = `\n最終通知: ${formatTimestampJST(state.lastNotifiedAt)}`;
-        }
-
-        // Current availability status
-        const availabilityInfo = state?.has ? "現在の空き: あり" : "現在の空き: なし";
-
-        // Monitoring interval
-        const interval = config?.intervalMinutes ?? 2;
-
-        await replyMessage(
-          accessToken,
-          replyToken,
-          `【現在の設定】\n\n` +
-            `状態: ${statusText}\n` +
-            `監視間隔: ${interval}分ごと\n\n` +
-            `${dateInfo}\n\n` +
-            `${availabilityInfo}\n` +
-            `${lastCheckInfo}${lastNotifyInfo}`
-        );
-        break;
-      }
-
-      case "使い方":
-      case "help":
-      case "ヘルプ": {
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "【サウナ予約監視ボット 使い方】\n\n" +
-            "■ 初期設定\n" +
-            "「登録」: 通知を受け取る登録\n\n" +
-            "■ 監視の開始・停止\n" +
-            "「開始」: 監視を開始\n" +
-            "「停止」: 監視を停止\n\n" +
-            "■ 監視日の管理（複数可）\n" +
-            "「1/15」: 1月15日を追加\n" +
-            "「1/2 1/3 1/4」: 複数日を一括追加\n" +
-            "「削除 1/15」: 1月15日を削除\n" +
-            "「全削除」: 全日付を削除\n\n" +
-            "■ 監視間隔\n" +
-            "「5分」: 5分間隔に変更（1〜60分）\n\n" +
-            "■ 状態確認\n" +
-            "「状態」: 現在の設定を表示"
-        );
-        break;
-      }
-
-      default: {
-        await replyMessage(
-          accessToken,
-          replyToken,
-          "コマンドが認識できませんでした。\n\n" +
-            "「使い方」と送信すると\n" +
-            "使い方の一覧が表示されます。"
-        );
-        break;
-      }
-    }
+    const messages = await execute(command, userId, today);
+    await replyMessage(accessToken, replyToken, messages);
   } catch (err) {
-    logger.error("Error processing event", { error: err, text, userId });
-    // Try to send error message
+    logger.error("Error processing event", {
+      error: err instanceof Error ? err.message : String(err),
+      kind: command.kind,
+      userId,
+    });
     try {
       await replyMessage(
         accessToken,
@@ -420,7 +359,7 @@ async function processEvent(
         "エラーが発生しました。しばらく待ってから再試行してください。"
       );
     } catch {
-      // Ignore reply error
+      // The reply token may already be spent; nothing more we can do.
     }
   }
 }
@@ -458,15 +397,8 @@ export const lineWebhook = onRequest(
         ? req.rawBody
         : req.rawBody?.toString("utf8") ?? JSON.stringify(req.body);
 
-    try {
-      const isValid = verifySignature(channelSecret, signature, rawBody);
-      if (!isValid) {
-        logger.warn("Invalid signature");
-        res.status(401).send("Unauthorized");
-        return;
-      }
-    } catch (err) {
-      logger.error("Signature verification error", { error: err });
+    if (!verifySignature(channelSecret, signature, rawBody)) {
+      logger.warn("Invalid signature");
       res.status(401).send("Unauthorized");
       return;
     }

@@ -3,9 +3,20 @@
  */
 
 import * as crypto from "crypto";
-import type { LineTextMessage } from "../types/index.js";
+import type { LineMessage } from "../types/index.js";
 
 const LINE_API_BASE = "https://api.line.me/v2/bot";
+const REQUEST_TIMEOUT_MS = 10_000;
+
+/** Accepts plain text for simple replies, or fully built message objects. */
+export type MessageInput = string | LineMessage | LineMessage[];
+
+function toMessages(input: MessageInput): LineMessage[] {
+  if (typeof input === "string") {
+    return [{ type: "text", text: input }];
+  }
+  return Array.isArray(input) ? input : [input];
+}
 
 /**
  * Verifies LINE webhook signature.
@@ -20,67 +31,81 @@ export function verifySignature(
   signature: string,
   body: string
 ): boolean {
-  const hash = crypto
+  const expected = crypto
     .createHmac("sha256", channelSecret)
     .update(body)
-    .digest("base64");
-  return crypto.timingSafeEqual(Buffer.from(hash), Buffer.from(signature));
+    .digest();
+  let received: Buffer;
+  try {
+    received = Buffer.from(signature, "base64");
+  } catch {
+    return false;
+  }
+  // timingSafeEqual throws on length mismatch, so compare lengths first.
+  if (received.length !== expected.length) {
+    return false;
+  }
+  return crypto.timingSafeEqual(expected, received);
+}
+
+async function callLineApi(
+  accessToken: string,
+  path: string,
+  payload: unknown,
+  label: string
+): Promise<void> {
+  const response = await fetch(`${LINE_API_BASE}${path}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${accessToken}`,
+    },
+    body: JSON.stringify(payload),
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`LINE ${label} failed: ${response.status} - ${errorText}`);
+  }
 }
 
 /**
- * Sends a reply message to LINE.
+ * Sends a reply to LINE.
  *
  * @param accessToken - LINE Channel Access Token
  * @param replyToken - Reply token from webhook event
- * @param text - Message text to send
+ * @param message - Text, or one or more message objects
  */
 export async function replyMessage(
   accessToken: string,
   replyToken: string,
-  text: string
+  message: MessageInput
 ): Promise<void> {
-  const messages: LineTextMessage[] = [{ type: "text", text }];
-
-  const response = await fetch(`${LINE_API_BASE}/message/reply`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ replyToken, messages }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LINE reply failed: ${response.status} - ${errorText}`);
-  }
+  await callLineApi(
+    accessToken,
+    "/message/reply",
+    { replyToken, messages: toMessages(message) },
+    "reply"
+  );
 }
 
 /**
- * Sends a push message to LINE user.
+ * Sends a push message to a LINE user.
  *
  * @param accessToken - LINE Channel Access Token
  * @param userId - Target user ID
- * @param text - Message text to send
+ * @param message - Text, or one or more message objects
  */
 export async function pushMessage(
   accessToken: string,
   userId: string,
-  text: string
+  message: MessageInput
 ): Promise<void> {
-  const messages: LineTextMessage[] = [{ type: "text", text }];
-
-  const response = await fetch(`${LINE_API_BASE}/message/push`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${accessToken}`,
-    },
-    body: JSON.stringify({ to: userId, messages }),
-  });
-
-  if (!response.ok) {
-    const errorText = await response.text();
-    throw new Error(`LINE push failed: ${response.status} - ${errorText}`);
-  }
+  await callLineApi(
+    accessToken,
+    "/message/push",
+    { to: userId, messages: toMessages(message) },
+    "push"
+  );
 }

@@ -2,7 +2,7 @@
  * Firestore access utilities
  */
 
-import { getFirestore } from "firebase-admin/firestore";
+import { getFirestore, FieldValue } from "firebase-admin/firestore";
 import type {
   LineTargetDoc,
   WatchConfigDoc,
@@ -13,6 +13,9 @@ import type {
 const LINE_TARGET_PATH = "line/target";
 const WATCH_CONFIG_PATH = "watch/config";
 const WATCH_STATE_PATH = "watch/state";
+
+/** Fallback interval when the config has never been written. */
+export const DEFAULT_INTERVAL_MINUTES = 2;
 
 /**
  * Gets the LINE target user document.
@@ -44,16 +47,21 @@ export async function getWatchConfig(): Promise<WatchConfigDoc | null> {
   return doc.exists ? (doc.data() as WatchConfigDoc) : null;
 }
 
+/** Writes fields onto watch/config, creating the document when missing. */
+async function mergeWatchConfig(
+  fields: Record<string, unknown>
+): Promise<void> {
+  const db = getFirestore();
+  await db
+    .doc(WATCH_CONFIG_PATH)
+    .set({ ...fields, updatedAt: Date.now() }, { merge: true });
+}
+
 /**
  * Updates the watch config enabled status.
  */
 export async function setWatchEnabled(enabled: boolean): Promise<void> {
-  const db = getFirestore();
-  const data: Partial<WatchConfigDoc> = {
-    enabled,
-    updatedAt: Date.now(),
-  };
-  await db.doc(WATCH_CONFIG_PATH).set(data, { merge: true });
+  await mergeWatchConfig({ enabled });
 }
 
 /**
@@ -63,88 +71,66 @@ export async function setWatchEnabled(enabled: boolean): Promise<void> {
 export async function setIntervalMinutes(
   intervalMinutes: number
 ): Promise<void> {
-  const db = getFirestore();
-  await db.doc(WATCH_CONFIG_PATH).set(
-    {
-      intervalMinutes,
-      updatedAt: Date.now(),
-    },
-    { merge: true }
-  );
+  await mergeWatchConfig({ intervalMinutes });
 }
 
 /**
- * Adds a target date for monitoring.
- * @param targetDate - Date in YYYY-MM-DD format
+ * Enables or disables the 00:00-06:00 JST pause.
  */
-export async function addTargetDate(targetDate: string): Promise<void> {
-  const db = getFirestore();
-  const docRef = db.doc(WATCH_CONFIG_PATH);
-  const doc = await docRef.get();
-  const currentDates: string[] =
-    (doc.exists && (doc.data() as WatchConfigDoc)?.targetDates) || [];
+export async function setNightPause(nightPause: boolean): Promise<void> {
+  await mergeWatchConfig({ nightPause });
+}
 
-  // Avoid duplicates and sort
-  if (!currentDates.includes(targetDate)) {
-    const newDates = [...currentDates, targetDate].sort();
-    await docRef.set(
-      {
-        targetDates: newDates,
-        updatedAt: Date.now(),
-      },
-      { merge: true }
-    );
+/**
+ * Adds target dates for monitoring in a single atomic write.
+ *
+ * @param dates - Dates in YYYY-MM-DD format
+ * @returns The full target date list after the write
+ */
+export async function addTargetDates(dates: string[]): Promise<string[]> {
+  if (dates.length === 0) {
+    return (await getWatchConfig())?.targetDates ?? [];
   }
+  await mergeWatchConfig({ targetDates: FieldValue.arrayUnion(...dates) });
+  const updated = (await getWatchConfig())?.targetDates ?? [];
+  return [...updated].sort();
 }
 
 /**
  * Removes a target date from monitoring.
+ *
  * @param targetDate - Date in YYYY-MM-DD format
+ * @returns Whether the date was present
  */
 export async function removeTargetDate(targetDate: string): Promise<boolean> {
-  const db = getFirestore();
-  const docRef = db.doc(WATCH_CONFIG_PATH);
-  const doc = await docRef.get();
-  const currentDates: string[] =
-    (doc.exists && (doc.data() as WatchConfigDoc)?.targetDates) || [];
-
-  const index = currentDates.indexOf(targetDate);
-  if (index === -1) {
-    return false; // Date not found
+  const current = (await getWatchConfig())?.targetDates ?? [];
+  if (!current.includes(targetDate)) {
+    return false;
   }
-
-  const newDates = currentDates.filter((d) => d !== targetDate);
-
-  if (newDates.length === 0) {
-    // Remove field if empty
-    const { FieldValue } = await import("firebase-admin/firestore");
-    await docRef.update({
-      targetDates: FieldValue.delete(),
-      updatedAt: Date.now(),
-    });
-  } else {
-    await docRef.set(
-      {
-        targetDates: newDates,
-        updatedAt: Date.now(),
-      },
-      { merge: true }
-    );
-  }
+  await mergeWatchConfig({ targetDates: FieldValue.arrayRemove(targetDate) });
   return true;
+}
+
+/**
+ * Removes dates that are already in the past (JST).
+ *
+ * @param today - Today's date in JST (YYYY-MM-DD)
+ * @returns The dates that were dropped
+ */
+export async function prunePastTargetDates(today: string): Promise<string[]> {
+  const current = (await getWatchConfig())?.targetDates ?? [];
+  const stale = current.filter((date) => date < today);
+  if (stale.length > 0) {
+    await mergeWatchConfig({ targetDates: FieldValue.arrayRemove(...stale) });
+  }
+  return stale;
 }
 
 /**
  * Clears all target dates.
  */
 export async function clearTargetDates(): Promise<void> {
-  const db = getFirestore();
-  const docRef = db.doc(WATCH_CONFIG_PATH);
-  const { FieldValue } = await import("firebase-admin/firestore");
-  await docRef.update({
-    targetDates: FieldValue.delete(),
-    updatedAt: Date.now(),
-  });
+  await mergeWatchConfig({ targetDates: FieldValue.delete() });
 }
 
 /**
@@ -161,7 +147,8 @@ export async function ensureWatchConfig(): Promise<WatchConfigDoc> {
 
   const defaultConfig: WatchConfigDoc = {
     enabled: false,
-    intervalMinutes: 2,
+    intervalMinutes: DEFAULT_INTERVAL_MINUTES,
+    nightPause: true,
     updatedAt: Date.now(),
   };
   await docRef.set(defaultConfig);
@@ -178,23 +165,36 @@ export async function getWatchState(): Promise<WatchStateDoc | null> {
 }
 
 /**
- * Updates the watch state.
- * @param has - Whether availability was found
- * @param notified - Whether a notification was sent
- * @param checkedTargetDates - The target dates that were checked (for change detection)
+ * Records the outcome of a check.
+ *
+ * Written with a full overwrite so stale dates never linger in the document.
+ *
+ * @param availableDates - Dates that currently have availability
+ * @param notified - Whether a notification was sent this run
+ * @param previousNotifiedAt - Existing lastNotifiedAt, preserved when not notifying
  */
 export async function updateWatchState(
-  has: boolean,
+  availableDates: string[],
   notified: boolean,
-  checkedTargetDates?: string[]
+  previousNotifiedAt?: number
 ): Promise<void> {
   const db = getFirestore();
   const now = Date.now();
+  const lastNotifiedAt = notified ? now : previousNotifiedAt;
   const data: WatchStateDoc = {
-    has,
+    has: availableDates.length > 0,
     checkedAt: now,
-    ...(notified ? { lastNotifiedAt: now } : {}),
-    ...(checkedTargetDates ? { checkedTargetDates } : {}),
+    availableDates,
+    ...(lastNotifiedAt !== undefined ? { lastNotifiedAt } : {}),
   };
-  await db.doc(WATCH_STATE_PATH).set(data, { merge: true });
+  await db.doc(WATCH_STATE_PATH).set(data);
+}
+
+/**
+ * Records that a check ran without touching availability (throttled tick,
+ * fetch failure, or paused window).
+ */
+export async function touchWatchState(): Promise<void> {
+  const db = getFirestore();
+  await db.doc(WATCH_STATE_PATH).set({ checkedAt: Date.now() }, { merge: true });
 }

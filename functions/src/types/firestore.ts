@@ -11,16 +11,21 @@ export interface LineTargetDoc {
 /** watch/config document */
 export interface WatchConfigDoc {
   enabled: boolean;
+  /** Minutes between checks (1-60). Enforced by watchScheduler, default 2. */
   intervalMinutes?: number;
-  targetDates?: string[]; // Array of YYYY-MM-DD format (e.g., ["2025-01-15", "2025-01-16"])
+  /** Array of YYYY-MM-DD (e.g. ["2026-08-23", "2026-08-30"]) */
+  targetDates?: string[];
+  /** Skip checks between 00:00 and 06:00 JST. Defaults to true. */
+  nightPause?: boolean;
   updatedAt: number;
 }
 
 /** watch/state document */
 export interface WatchStateDoc {
+  /** True when any monitored date had availability at the last check. */
   has: boolean;
   checkedAt: number;
   lastNotifiedAt?: number;
-  /** The targetDate(s) that was checked when has was set */
-  checkedTargetDates?: string[];
+  /** Dates (YYYY-MM-DD) that had availability at the last check. */
+  availableDates?: string[];
 }

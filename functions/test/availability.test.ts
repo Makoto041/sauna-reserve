@@ -1,5 +1,15 @@
-import { describe, it, expect } from "vitest";
-import { detectAvailability } from "../src/lib/availability.js";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+import { addDays } from "../src/lib/datetime.js";
+import {
+  checkDates,
+  detectAvailability,
+  parseCalendar,
+  groupIntoWindows,
+  getTargetUrl,
+  windowEnd,
+} from "../src/lib/availability.js";
 
 /**
  * Test fixtures based on actual SelectType HTML structure.
@@ -337,75 +347,208 @@ describe("detectAvailability", () => {
       expect(detectAvailability(html, "2025-01-03")).toBe(false);
     });
   });
+});
 
-  describe("with targetDate filter", () => {
-    it("should return true when target date has availability", () => {
-      const html = `
-        <html>
-          <body>
-            <div class="calendar">
-              <div class="day">14</div><span>×</span>
-              <div class="day">15</div><span>●</span>
-              <div class="day">16</div><span>×</span>
-            </div>
-          </body>
-        </html>
-      `;
-      expect(detectAvailability(html, "2025-01-15")).toBe(true);
+/**
+ * Snapshot of the real reservation page, week of 2026-08-23.
+ *
+ * Grid as rendered (rows 12:00-21:00, columns 8/23-8/29):
+ *   8/23 ×××× ▲ ×××× ●   8/24 ●●●●● ▲ ×× ▲ ●   8/25 all ●   8/26-8/29 not yet open
+ */
+const LIVE_FIXTURE = readFileSync(
+  fileURLToPath(new URL("./fixtures/selecttype-week.html", import.meta.url)),
+  "utf8"
+);
+
+describe("parseCalendar (real page snapshot)", () => {
+  const days = parseCalendar(LIVE_FIXTURE, "2026-08-23");
+
+  it("resolves every rendered column to a full date", () => {
+    expect(days.map((day) => day.date)).toEqual([
+      "2026-08-23",
+      "2026-08-24",
+      "2026-08-25",
+      "2026-08-26",
+      "2026-08-27",
+      "2026-08-28",
+      "2026-08-29",
+    ]);
+  });
+
+  it("collects only the bookable slots for a partly booked day", () => {
+    const day = days.find((entry) => entry.date === "2026-08-23");
+    expect(day?.slots.map((slot) => `${slot.time}${slot.marker}`)).toEqual([
+      "16:00▲",
+      "21:00●",
+    ]);
+  });
+
+  it("reads slot times and remaining seats from the page", () => {
+    const day = days.find((entry) => entry.date === "2026-08-24");
+    expect(day?.slots[0]).toMatchObject({
+      time: "12:00",
+      marker: "●",
+      seats: "5人",
+      startAt: 1787540400,
+    });
+  });
+
+  it("treats a fully open day as available in every slot", () => {
+    const day = days.find((entry) => entry.date === "2026-08-25");
+    expect(day?.slots).toHaveLength(10);
+  });
+
+  it("reports days that are not open for booking as empty", () => {
+    for (const date of ["2026-08-26", "2026-08-27", "2026-08-28", "2026-08-29"]) {
+      expect(days.find((entry) => entry.date === date)?.slots).toEqual([]);
+    }
+  });
+
+  it("does not pick up the legend markers", () => {
+    expect(LIVE_FIXTURE).toContain('class="cl-sign');
+    expect(detectAvailability(LIVE_FIXTURE, "2026-08-27")).toBe(false);
+  });
+
+  it("answers detectAvailability per date", () => {
+    expect(detectAvailability(LIVE_FIXTURE, "2026-08-23")).toBe(true);
+    expect(detectAvailability(LIVE_FIXTURE, "2026-08-25")).toBe(true);
+    expect(detectAvailability(LIVE_FIXTURE, "2026-08-26")).toBe(false);
+    // Outside the rendered window
+    expect(detectAvailability(LIVE_FIXTURE, "2026-09-05")).toBe(false);
+  });
+
+  it("resolves the year across the December/January boundary", () => {
+    const december = parseCalendar(
+      LIVE_FIXTURE.replace(/>8\/2(\d)</g, ">12/2$1<"),
+      "2026-12-23"
+    );
+    expect(december[0].date).toBe("2026-12-23");
+
+    const january = parseCalendar(
+      LIVE_FIXTURE.replace(/>8\/2(\d)</g, ">1/$1<"),
+      "2026-12-30"
+    );
+    expect(january[0].date).toBe("2027-01-03");
+  });
+});
+
+describe("groupIntoWindows", () => {
+  it("covers a single date with one window", () => {
+    expect(groupIntoWindows(["2026-09-10"])).toEqual(["2026-09-10"]);
+  });
+
+  it("packs dates within seven days into one fetch", () => {
+    expect(
+      groupIntoWindows(["2026-09-10", "2026-09-12", "2026-09-16"])
+    ).toEqual(["2026-09-10"]);
+    expect(windowEnd("2026-09-10")).toBe("2026-09-16");
+  });
+
+  it("starts a new window on the eighth day", () => {
+    expect(
+      groupIntoWindows(["2026-09-10", "2026-09-17", "2026-09-18"])
+    ).toEqual(["2026-09-10", "2026-09-17"]);
+  });
+
+  it("sorts and de-duplicates its input", () => {
+    expect(
+      groupIntoWindows(["2026-09-20", "2026-09-10", "2026-09-20"])
+    ).toEqual(["2026-09-10", "2026-09-20"]);
+  });
+
+  it("returns nothing for no dates", () => {
+    expect(groupIntoWindows([])).toEqual([]);
+  });
+});
+
+describe("getTargetUrl", () => {
+  it("returns the bare page without a date", () => {
+    expect(getTargetUrl()).toBe("https://select-type.com/rsv/?id=0AEeQuFE0HM");
+  });
+
+  it("jumps the calendar to the requested week", () => {
+    expect(getTargetUrl("2026-09-10")).toBe(
+      "https://select-type.com/rsv/?id=0AEeQuFE0HM&date=20260910"
+    );
+  });
+});
+
+describe("checkDates", () => {
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  /**
+   * Serves a generated 7-day window for whatever `date=` the caller asks for,
+   * and records the requests so the fetch count can be asserted.
+   */
+  function stubCalendar(available: string[], failFor: string[] = []) {
+    const requested: string[] = [];
+
+    vi.stubGlobal("fetch", async (url: string) => {
+      const param = new URL(url).searchParams.get("date") ?? "";
+      requested.push(param);
+
+      if (failFor.includes(param)) {
+        return { ok: false, status: 503, statusText: "Service Unavailable" };
+      }
+
+      const start = `${param.slice(0, 4)}-${param.slice(4, 6)}-${param.slice(6, 8)}`;
+      const window = Array.from({ length: 7 }, (_, offset) =>
+        addDays(start, offset)
+      );
+      const headers = window.map((date) => {
+        const [, month, day] = date.split("-").map((part) => parseInt(part, 10));
+        return `${month}/${day}`;
+      });
+      const row = window.map((date) => (available.includes(date) ? "●" : "×"));
+
+      return {
+        ok: true,
+        status: 200,
+        statusText: "OK",
+        text: async () => createSelectTypeHtml(headers, [row]),
+      };
     });
 
-    it("should return false when target date has no availability", () => {
-      const html = `
-        <html>
-          <body>
-            <div class="calendar">
-              <div class="day">14</div><span>●</span>
-              <div class="day">15</div><span>×</span>
-              <div class="day">16</div><span>●</span>
-            </div>
-          </body>
-        </html>
-      `;
-      expect(detectAvailability(html, "2025-01-15")).toBe(false);
-    });
+    return requested;
+  }
 
-    it("should return true when target date has partial availability (▲)", () => {
-      const html = `
-        <html>
-          <body>
-            <table>
-              <tr><td>15</td><td>▲</td></tr>
-              <tr><td>16</td><td>×</td></tr>
-            </table>
-          </body>
-        </html>
-      `;
-      expect(detectAvailability(html, "2025-01-15")).toBe(true);
-    });
+  it("fetches one page for dates inside the same week", async () => {
+    const requested = stubCalendar(["2026-09-12"]);
 
-    it("should handle calendar-style HTML", () => {
-      const html = `
-        <div class="month">1月</div>
-        <table class="calendar">
-          <tr>
-            <td class="day"><span>14</span><div class="status">×</div></td>
-            <td class="day"><span>15</span><div class="status">●</div></td>
-            <td class="day"><span>16</span><div class="status">×</div></td>
-          </tr>
-        </table>
-      `;
-      expect(detectAvailability(html, "2025-01-15")).toBe(true);
-      expect(detectAvailability(html, "2025-01-14")).toBe(false);
-    });
+    const report = await checkDates([
+      "2026-09-10",
+      "2026-09-12",
+      "2026-09-16",
+    ]);
 
-    it("should return false when date is not found", () => {
-      const html = `
-        <div class="calendar">
-          <div>1</div><span>●</span>
-          <div>2</div><span>●</span>
-        </div>
-      `;
-      expect(detectAvailability(html, "2025-01-15")).toBe(false);
-    });
+    expect(requested).toEqual(["20260910"]);
+    expect(report.fetches).toBe(1);
+    expect(report.byDate["2026-09-12"]).toHaveLength(1);
+    expect(report.byDate["2026-09-10"]).toEqual([]);
+    expect(report.byDate["2026-09-16"]).toEqual([]);
+    expect(report.missing).toEqual([]);
+    expect(report.errors).toEqual([]);
+  });
+
+  it("fetches a second page only when a date falls outside the window", async () => {
+    const requested = stubCalendar([]);
+
+    await checkDates(["2026-09-10", "2026-09-17"]);
+
+    expect(requested).toEqual(["20260910", "20260917"]);
+  });
+
+  it("reports a failed window instead of silently claiming no availability", async () => {
+    stubCalendar(["2026-09-10"], ["20260910"]);
+
+    const report = await checkDates(["2026-09-10"]);
+
+    expect(report.errors).toHaveLength(1);
+    expect(report.errors[0]).toContain("2026-09-10");
+    expect(report.byDate).toEqual({});
+    // Not "missing" either: we simply do not know.
+    expect(report.missing).toEqual([]);
   });
 });

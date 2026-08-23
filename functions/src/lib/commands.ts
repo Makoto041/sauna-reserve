@@ -89,6 +89,24 @@ export function parseMultipleDates(input: string, today: string): string[] {
   return [...dates].sort();
 }
 
+/**
+ * Splits requested dates into ones still worth monitoring and ones already
+ * gone. An explicit year ("2020/1/1") or a date picker built on an earlier day
+ * can both hand us a past date, which the scheduler would only prune later.
+ *
+ * @param dates - YYYY-MM-DD dates
+ * @param today - Today's date in JST
+ */
+export function splitPastDates(
+  dates: string[],
+  today: string
+): { future: string[]; past: string[] } {
+  return {
+    future: dates.filter((date) => date >= today),
+    past: dates.filter((date) => date < today),
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Command resolution
  * ------------------------------------------------------------------ */

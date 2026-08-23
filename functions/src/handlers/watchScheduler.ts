@@ -87,6 +87,11 @@ export const watchScheduler = onSchedule(
         return;
       }
 
+      // Claim the tick before doing any slow work. Without this a run that
+      // outlives the one-minute tick would let the next tick pass the throttle
+      // on the old checkedAt and fetch (and notify) twice.
+      await touchWatchState();
+
       // Step 4: someone has to receive the notification.
       const target = await getLineTarget();
       if (!target?.userId) {
@@ -129,14 +134,13 @@ export const watchScheduler = onSchedule(
         });
       }
 
-      // Nothing was learned: record the attempt and keep the previous state so
-      // a transient outage cannot look like "everything became unavailable"
-      // and then re-notify on recovery.
+      // Nothing was learned: the tick is already recorded, so keep the previous
+      // state rather than letting a transient outage look like "everything
+      // became unavailable" and re-notify on recovery.
       if (
         report.errors.length > 0 &&
         (targetDates.length === 0 || Object.keys(report.byDate).length === 0)
       ) {
-        await touchWatchState();
         return;
       }
 

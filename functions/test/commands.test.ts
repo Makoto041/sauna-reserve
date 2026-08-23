@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   parseDate,
+  splitPastDates,
   parseMultipleDates,
   resolveCommand,
 } from "../src/lib/commands.js";
@@ -140,5 +141,29 @@ describe("resolveCommand", () => {
 
   it("falls through to unknown for free text", () => {
     expect(resolveCommand("こんにちは", TODAY)).toEqual({ kind: "unknown" });
+  });
+});
+
+describe("splitPastDates", () => {
+  it("keeps today and future dates", () => {
+    expect(
+      splitPastDates(["2026-08-22", "2026-09-01"], TODAY)
+    ).toEqual({ future: ["2026-08-22", "2026-09-01"], past: [] });
+  });
+
+  it("separates out dates that have already passed", () => {
+    // An explicit year bypasses the "next occurrence" rule, and a date picker
+    // built on an earlier day can still be tapped today.
+    expect(splitPastDates(["2020-01-01", "2026-09-01"], TODAY)).toEqual({
+      future: ["2026-09-01"],
+      past: ["2020-01-01"],
+    });
+  });
+
+  it("reports everything as past when nothing is usable", () => {
+    expect(splitPastDates(["2026-08-21"], TODAY)).toEqual({
+      future: [],
+      past: ["2026-08-21"],
+    });
   });
 });

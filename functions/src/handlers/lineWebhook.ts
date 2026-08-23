@@ -37,6 +37,7 @@ import {
   formatTimestampJST,
   todayJST,
   resolveCommand,
+  splitPastDates,
   MIN_INTERVAL_MINUTES,
   MAX_INTERVAL_MINUTES,
   type Command,
@@ -108,20 +109,39 @@ async function execute(
     }
 
     case "add": {
-      const all = await addTargetDates(command.dates);
+      // Explicit years ("2020/1/1") and stale date pickers can both carry a
+      // past date, which the next tick would prune - and, if it were the only
+      // date, silently stop monitoring.
+      const { future: dates, past } = splitPastDates(command.dates, today);
       const config = await getWatchConfig();
-      logger.info("Target dates added", { userId, dates: command.dates });
+
+      if (dates.length === 0) {
+        return [
+          textReply(
+            `過去の日付は追加できません。\n${past.map(formatLongJa).join("\n")}`,
+            config?.enabled ?? false,
+            today
+          ),
+        ];
+      }
+
+      const all = await addTargetDates(dates);
+      logger.info("Target dates added", { userId, dates, skipped: past });
       const added =
-        command.dates.length === 1
-          ? `${formatLongJa(command.dates[0])} を監視対象に追加しました。`
-          : `${command.dates.length}件を監視対象に追加しました。\n` +
-            command.dates.map(formatLongJa).join("\n");
+        dates.length === 1
+          ? `${formatLongJa(dates[0])} を監視対象に追加しました。`
+          : `${dates.length}件を監視対象に追加しました。\n` +
+            dates.map(formatLongJa).join("\n");
+      const skipped =
+        past.length > 0
+          ? `\n\n過去の日付は追加していません:\n${past.map(formatLongJa).join("\n")}`
+          : "";
       const hint = config?.enabled
         ? ""
         : "\n\n「▶️ 開始」を押すと監視を始めます。";
       return [
         textReply(
-          `${added}\n\n現在の監視日: ${all.length}件${hint}`,
+          `${added}${skipped}\n\n現在の監視日: ${all.length}件${hint}`,
           config?.enabled ?? false,
           today
         ),

@@ -32,9 +32,4 @@ export interface WatchStateDoc {
    * already has one opening must still notify when another time frees up.
    */
   availableSlots?: string[];
-  /**
-   * Per-date state written by versions before slot-level tracking.
-   * Only read, to recognise a document that predates `availableSlots`.
-   */
-  availableDates?: string[];
 }

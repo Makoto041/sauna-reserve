@@ -10,6 +10,12 @@ import type { Slot } from "./availability.js";
  * Availability is tracked per slot, not per date. A day frequently has one
  * opening for hours while other times come and go; keying on the date alone
  * means only the first of those is ever announced.
+ *
+ * Day plus start time is enough only because the calendar renders one course
+ * at a time, one row per time. If monitoring is ever extended to a second
+ * course (see the c_id limitation in the README), two rows could share a start
+ * time and collapse onto one key — reproducing the per-date bug a level down.
+ * The course id would have to become part of the key.
  */
 export function slotKey(date: string, slot: Slot): string {
   return `${date} ${slot.time}`;

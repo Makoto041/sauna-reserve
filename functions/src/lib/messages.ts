@@ -210,7 +210,7 @@ function labelledRow(label: string, value: string, valueColor = COLOR_TEXT): Fle
   };
 }
 
-/** "12:00　●　残り5人" */
+/** One rendered slot line: time, marker, remaining seats. */
 function slotRow(slot: Slot): FlexBox {
   const contents: FlexComponent[] = [
     { type: "text", text: slot.time, size: "sm", weight: "bold", flex: 3 },

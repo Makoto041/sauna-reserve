@@ -32,6 +32,7 @@ import {
   decodePostback,
   statusMessage,
   helpMessage,
+  welcomeMessage,
   deletePickerMessage,
   textReply,
   formatLongJa,
@@ -39,6 +40,7 @@ import {
   todayJST,
   resolveCommand,
   splitPastDates,
+  MUTATING_COMMANDS,
   MIN_INTERVAL_MINUTES,
   MAX_INTERVAL_MINUTES,
   type Command,
@@ -71,6 +73,26 @@ async function execute(
   userId: string,
   today: string
 ): Promise<LineMessage[]> {
+  if (MUTATING_COMMANDS.has(command.kind)) {
+    const owner = await getLineTarget();
+    if (owner?.userId && owner.userId !== userId) {
+      logger.info("Refused a config change from a non-owner", {
+        userId,
+        kind: command.kind,
+      });
+      const config = await getWatchConfig();
+      return [
+        textReply(
+          "この監視は別のユーザーが設定しています。\n\n" +
+            "自分の通知として使う場合は「登録」と送ってください。\n" +
+            "（通知先が自分に切り替わり、設定を変更できるようになります）",
+          config?.enabled ?? false,
+          today
+        ),
+      ];
+    }
+  }
+
   switch (command.kind) {
     case "follow": {
       // Auto-registering on follow is convenient, but line/target holds a
@@ -97,15 +119,7 @@ async function execute(
       await setLineTarget(userId);
       const config = await ensureWatchConfig();
       logger.info("User registered", { userId });
-      return [
-        textReply(
-          "登録が完了しました。\n\n" +
-            "下のボタンで操作できます。\n" +
-            "「📅 日付を追加」で監視したい日を選び、「▶️ 開始」を押すと監視が始まります。",
-          config.enabled,
-          today
-        ),
-      ];
+      return [welcomeMessage(config.enabled, today)];
     }
 
     case "start": {
@@ -254,13 +268,15 @@ async function execute(
     }
 
     case "unknown": {
+      // Someone who types something unexpected is usually lost rather than
+      // mistyping a command, so answer with the guide instead of an error.
       const config = await getWatchConfig();
       return [
-        textReply(
-          "コマンドが認識できませんでした。\n下のボタンから操作するか、「使い方」と送ってください。",
-          config?.enabled ?? false,
-          today
-        ),
+        {
+          type: "text",
+          text: "うまく読み取れませんでした。使い方を出しますね。",
+        },
+        helpMessage(config?.enabled ?? false),
       ];
     }
   }

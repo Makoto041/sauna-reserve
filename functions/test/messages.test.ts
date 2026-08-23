@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type {
   FlexComponent,
   FlexContainer,
@@ -17,6 +19,7 @@ import {
   monitoringStoppedMessage,
   statusMessage,
   textReply,
+  welcomeMessage,
 } from "../src/lib/messages.js";
 
 const TODAY = "2026-08-22";
@@ -332,10 +335,89 @@ describe("monitoringStoppedMessage", () => {
   });
 });
 
+describe("welcomeMessage", () => {
+  const message = welcomeMessage(false, TODAY);
+
+  it("walks a first-time user through the three steps in order", () => {
+    const rendered = JSON.stringify(message);
+    for (const step of ["行きたい日を選ぶ", "「監視開始」を押す", "通知を待つ"]) {
+      expect(rendered).toContain(step);
+    }
+    expect(rendered.indexOf("行きたい日を選ぶ")).toBeLessThan(
+      rendered.indexOf("通知を待つ")
+    );
+  });
+
+  it("leads with the date picker, which is the first thing to do", () => {
+    const actions = collectActions(message.contents);
+    expect(actions[0]).toMatchObject({ type: "datetimepicker" });
+  });
+
+  it("points at the rich menu so the buttons are findable later", () => {
+    expect(JSON.stringify(message)).toContain("メニュー");
+  });
+
+  it("says what the bot does in the altText, for the notification preview", () => {
+    expect(message.altText).toContain("空き");
+    expectValidMessage(message);
+  });
+
+  it("reflects that monitoring is already running", () => {
+    // 「登録」 is also how the notification target is taken over, so this card
+    // can appear while monitoring is on. Offering 開始 would misstate the state
+    // and drop the one-tap way to stop.
+    const running = welcomeMessage(true, TODAY);
+    const labels = (running.quickReply?.items ?? []).map((item) =>
+      labelOf(item.action)
+    );
+    expect(labels).toContain("⏸ 停止");
+    expect(labels).not.toContain("▶️ 開始");
+    expectValidMessage(running);
+  });
+});
+
 describe("helpMessage", () => {
   it("is a valid flex message with the control strip attached", () => {
     const message: LineFlexMessage = helpMessage(false);
     expect(message.quickReply?.items.length).toBeGreaterThan(0);
     expectValidMessage(message);
+  });
+
+  it("leads with the steps before the keyword list", () => {
+    const rendered = JSON.stringify(helpMessage(false));
+    expect(rendered.indexOf("使いはじめ")).toBeLessThan(
+      rendered.indexOf("キーワードを送っても")
+    );
+  });
+});
+
+describe("rich menu tiles", () => {
+  // The rich menu lives outside the Functions build (it is registered by a
+  // standalone script), so its postback strings are duplicated. Read them back
+  // from the script itself: a typo there is invisible until someone taps the
+  // tile and gets 「エラーが発生しました」.
+  const script = readFileSync(
+    fileURLToPath(new URL("../../scripts/richmenu/setup.mjs", import.meta.url)),
+    "utf8"
+  );
+  const dataStrings = [...script.matchAll(/data:\s*"([^"]+)"/g)].map(
+    (match) => match[1]
+  );
+
+  it("finds the tile actions in the script", () => {
+    expect(dataStrings.length).toBe(6);
+  });
+
+  it("every tile decodes to a command the webhook handles", () => {
+    for (const data of dataStrings) {
+      expect(decodePostback(data), `unhandled rich menu tile: ${data}`).not.toBeNull();
+    }
+  });
+
+  it("offers the actions a first-time user needs", () => {
+    const actions = dataStrings.map((data) => decodePostback(data)?.action);
+    expect(actions).toContain("add");
+    expect(actions).toContain("start");
+    expect(actions).toContain("help");
   });
 });

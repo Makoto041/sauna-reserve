@@ -19,7 +19,7 @@ SelectType予約ページの空きを定期監視し、空きが出たらLINEに
 - Firebase Cloud Functions v2
 - Firestore（状態管理）
 - LINE Messaging API
-- TypeScript / Node.js 20
+- TypeScript / Node.js 22
 
 ---
 
@@ -291,6 +291,14 @@ npm test
 npm run test:watch
 ```
 
+### Lint
+
+```bash
+cd functions
+npm run lint      # 検査のみ
+npm run lint:fix  # 自動修正
+```
+
 ### LINEメッセージの検証
 
 Flex Message の妥当性を最終的に判断するのはLINEサーバーです。不正なペイロードは
@@ -378,7 +386,7 @@ LINE_CHANNEL_ACCESS_TOKEN="$(firebase functions:secrets:access LINE_CHANNEL_ACCE
 
 ### デプロイエラー
 
-- Node.js 20がインストールされているか確認
+- Node.js 22がインストールされているか確認
 - `npm run build` が成功するか確認
 
 ---
@@ -392,7 +400,7 @@ LINE_CHANNEL_ACCESS_TOKEN="$(firebase functions:secrets:access LINE_CHANNEL_ACCE
   対応する場合は `watch/state.availableSlots` のキー（現在は「日付＋開始時刻」）にコースIDを含める必要がある —
   カレンダーが1コースずつ・1時刻1行で描画されるからこそ、いまのキーで一意になっている
 - 日付を指定しない「全日程」モードは、予約ページが初期表示する**今週7日分**のみが対象
-- `npm run lint` は ESLint の設定ファイルが未整備のため動作しない
+- ESLint は flat config（`functions/eslint.config.mjs`）。型情報を使わない `recommended` のみで、型付きルールは未導入
 
 ---
 

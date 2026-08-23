@@ -31,6 +31,13 @@ export function verifySignature(
   signature: string,
   body: string
 ): boolean {
+  // defineSecret().value() resolves to "" when the secret failed to load.
+  // HMACing with an empty key would accept any request an attacker can sign
+  // with that same empty key, so fail closed instead.
+  if (!channelSecret) {
+    return false;
+  }
+
   const expected = crypto
     .createHmac("sha256", channelSecret)
     .update(body)

@@ -399,6 +399,18 @@ export const lineWebhook = onRequest(
     const accessToken = lineChannelAccessToken.value();
     const channelSecret = lineChannelSecret.value();
 
+    // A missing secret resolves to an empty string rather than throwing. Say so
+    // loudly: without this the request would be rejected as an invalid
+    // signature, which reads like an attack rather than a misconfiguration.
+    if (!channelSecret || !accessToken) {
+      logger.error("LINE secrets are not available", {
+        hasChannelSecret: Boolean(channelSecret),
+        hasAccessToken: Boolean(accessToken),
+      });
+      res.status(500).send("Server misconfigured");
+      return;
+    }
+
     // Verify signature
     const signature = req.headers["x-line-signature"];
     if (typeof signature !== "string") {

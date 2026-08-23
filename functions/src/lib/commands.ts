@@ -72,7 +72,10 @@ export function parseDate(input: string, today: string): string | null {
  * @returns Sorted unique dates, or an empty array when the text is not a date list
  */
 export function parseMultipleDates(input: string, today: string): string[] {
-  const parts = input.split(/[\s,、　]+/).filter((part) => part.length > 0);
+  // \u3000 is the full-width space: phones insert it when typing Japanese.
+  const parts = input
+    .split(/[\s,、\u3000]+/)
+    .filter((part) => part.length > 0);
   if (parts.length === 0) {
     return [];
   }

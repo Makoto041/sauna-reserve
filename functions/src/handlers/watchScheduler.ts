@@ -98,7 +98,18 @@ export const watchScheduler = onSchedule(
       // on the old checkedAt and fetch (and notify) twice.
       await touchWatchState();
 
+      // Same fail-closed reasoning as the webhook: a secret that failed to
+      // load resolves to "" rather than throwing. Pushing with an empty Bearer
+      // token just logs "Failed to send notification" every tick, which reads
+      // like a LINE outage rather than a missing secret.
       const accessToken = lineChannelAccessToken.value();
+      if (!accessToken) {
+        logger.error(
+          "LINE_CHANNEL_ACCESS_TOKEN is not available, skipping check"
+        );
+        return;
+      }
+
       const today = todayJST(startTime);
       const target = await getLineTarget();
 

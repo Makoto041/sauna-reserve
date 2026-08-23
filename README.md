@@ -297,10 +297,16 @@ Flex Message の妥当性を最終的に判断するのはLINEサーバーです
 メッセージを変更したら、送信せずに検証できるスクリプトを通してください。
 
 ```bash
+# リポジトリのルートで実行します
+cd "$(git rev-parse --show-toplevel)"
+
 npm --prefix functions run build
 LINE_CHANNEL_ACCESS_TOKEN="$(firebase functions:secrets:access LINE_CHANNEL_ACCESS_TOKEN)" \
   node scripts/validate-messages.mjs
 ```
+
+ビルドが `functions/src` より古い場合は、前のコードを検証してしまわないよう
+実行を拒否します。
 
 ---
 

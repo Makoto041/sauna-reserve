@@ -12,9 +12,9 @@
  *     node scripts/validate-messages.mjs
  */
 
-import { pathToFileURL } from "node:url";
-import { resolve, dirname } from "node:path";
-import { fileURLToPath } from "node:url";
+import { readdir, stat } from "node:fs/promises";
+import { join, resolve, dirname } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const VALIDATE_URL = "https://api.line.me/v2/bot/message/validate/push";
 
@@ -29,15 +29,48 @@ if (!token) {
 }
 
 const here = dirname(fileURLToPath(import.meta.url));
+const sourceDir = resolve(here, "../functions/src");
 const buildPath = resolve(here, "../functions/lib/lib/messages.js");
+
+/** Most recent mtime under a directory, in epoch ms. */
+async function newestMtime(dir) {
+  let newest = 0;
+  for (const entry of await readdir(dir, { withFileTypes: true })) {
+    const path = join(dir, entry.name);
+    const mtime = entry.isDirectory()
+      ? await newestMtime(path)
+      : (await stat(path)).mtimeMs;
+    newest = Math.max(newest, mtime);
+  }
+  return newest;
+}
+
+let built;
+try {
+  built = await stat(buildPath);
+} catch {
+  console.error(
+    `${buildPath} does not exist. Run: npm --prefix functions run build`
+  );
+  process.exit(1);
+}
+
+// Validating a stale build is the exact false pass this script exists to
+// prevent, so refuse rather than warn.
+if ((await newestMtime(sourceDir)) > built.mtimeMs) {
+  console.error(
+    "functions/src is newer than the build; this would validate the previous\n" +
+      "code. Run: npm --prefix functions run build"
+  );
+  process.exit(1);
+}
 
 let messages;
 try {
   messages = await import(pathToFileURL(buildPath).href);
-} catch {
-  console.error(
-    `Cannot load ${buildPath}. Run: npm --prefix functions run build`
-  );
+} catch (err) {
+  console.error(`Cannot load ${buildPath}:`);
+  console.error(err);
   process.exit(1);
 }
 
@@ -53,9 +86,15 @@ const status = {
   lastNotifiedAtText: "8/23 10:15",
 };
 
+const manyDates = Array.from(
+  { length: 14 },
+  (_, index) => `2026-09-${String(index + 1).padStart(2, "0")}`
+);
+
 /**
- * One entry per builder, plus the branches that change the payload shape
- * (empty lists, carousel vs single bubble, on/off state).
+ * One entry per builder, plus every branch that changes the payload shape:
+ * empty lists, carousel vs single bubble, on/off state, and the truncation
+ * paths, which add an extra "ほか N 件" component that nothing else exercises.
  */
 const CASES = {
   "welcome (stopped)": messages.welcomeMessage(false),
@@ -76,8 +115,15 @@ const CASES = {
     "2026-08-24",
     "2026-08-25",
   ]),
+  "delete picker (truncated)": messages.deletePickerMessage(manyDates),
+  "status (truncated dates)": messages.statusMessage({
+    ...status,
+    targetDates: manyDates,
+  }),
   "monitoring stopped": messages.monitoringStoppedMessage(["2026-08-22"]),
   "monitoring stopped (no dates)": messages.monitoringStoppedMessage([]),
+  "monitoring stopped (truncated)":
+    messages.monitoringStoppedMessage(manyDates),
   "availability (one day)": messages.availabilityNotification([
     {
       date: "2026-08-24",
@@ -88,6 +134,17 @@ const CASES = {
     { date: "2026-08-24", slots: [slot("12:00", "●", "5人")] },
     { date: "2026-08-25", slots: [slot("13:00", "▲", "2人")] },
   ]),
+  "availability (truncated slots)": messages.availabilityNotification([
+    {
+      date: "2026-08-24",
+      slots: Array.from({ length: 10 }, (_, index) =>
+        slot(`${12 + index}:00`, "●", "3人")
+      ),
+    },
+  ]),
+  "availability (capped carousel)": messages.availabilityNotification(
+    manyDates.map((date) => ({ date, slots: [slot("12:00", "●", "4人")] }))
+  ),
   "text reply": messages.textReply("テスト", true),
 };
 

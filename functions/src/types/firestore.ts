@@ -22,10 +22,19 @@ export interface WatchConfigDoc {
 
 /** watch/state document */
 export interface WatchStateDoc {
-  /** True when any monitored date had availability at the last check. */
+  /** True when any monitored slot was open at the last check. */
   has: boolean;
   checkedAt: number;
   lastNotifiedAt?: number;
-  /** Dates (YYYY-MM-DD) that had availability at the last check. */
+  /**
+   * Slots ("YYYY-MM-DD HH:MM") that were open at the last check and have
+   * already been notified. Keyed per slot rather than per date: a day that
+   * already has one opening must still notify when another time frees up.
+   */
+  availableSlots?: string[];
+  /**
+   * Per-date state written by versions before slot-level tracking.
+   * Only read, to recognise a document that predates `availableSlots`.
+   */
   availableDates?: string[];
 }

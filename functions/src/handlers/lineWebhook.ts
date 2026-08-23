@@ -57,7 +57,7 @@ async function buildStatusMessage(): Promise<LineMessage> {
     intervalMinutes: config?.intervalMinutes ?? DEFAULT_INTERVAL_MINUTES,
     nightPause: config?.nightPause ?? true,
     targetDates: [...(config?.targetDates ?? [])].sort(),
-    availableDates: state?.availableDates ?? [],
+    availableSlots: state?.availableSlots ?? [],
     checkedAtText: state?.checkedAt
       ? formatTimestampJST(state.checkedAt)
       : undefined,

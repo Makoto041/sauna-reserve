@@ -81,7 +81,7 @@ const status = {
   intervalMinutes: 5,
   nightPause: true,
   targetDates: ["2026-08-24", "2026-08-25"],
-  availableDates: ["2026-08-24"],
+  availableSlots: ["2026-08-24 12:00", "2026-08-24 21:00"],
   checkedAtText: "8/23 11:00",
   lastNotifiedAtText: "8/23 10:15",
 };

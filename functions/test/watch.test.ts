@@ -1,28 +1,111 @@
 import { describe, it, expect } from "vitest";
-import { datesToRemember } from "../src/lib/watch.js";
+import {
+  dateOfSlotKey,
+  datesOfSlots,
+  slotKey,
+  slotsToRemember,
+} from "../src/lib/watch.js";
 
-describe("datesToRemember", () => {
-  it("records everything once the notification went out", () => {
+const slot = (time: string) => ({ time, marker: "\u25cf" as const });
+
+describe("slotKey", () => {
+  it("identifies a slot by day and time", () => {
+    expect(slotKey("2026-08-23", slot("20:00"))).toBe("2026-08-23 20:00");
+  });
+
+  it("distinguishes two slots on the same day", () => {
+    // The whole point: 8/23 21:00 being open must not mask 8/23 20:00 opening.
+    expect(slotKey("2026-08-23", slot("20:00"))).not.toBe(
+      slotKey("2026-08-23", slot("21:00"))
+    );
+  });
+
+  it("round-trips the date", () => {
+    expect(dateOfSlotKey(slotKey("2026-08-23", slot("09:30")))).toBe(
+      "2026-08-23"
+    );
+  });
+});
+
+describe("datesOfSlots", () => {
+  it("collapses slots to the days they fall on", () => {
     expect(
-      datesToRemember(["2026-08-23", "2026-08-24"], ["2026-08-24"], true)
+      datesOfSlots([
+        "2026-08-24 13:00",
+        "2026-08-23 21:00",
+        "2026-08-23 20:00",
+      ])
     ).toEqual(["2026-08-23", "2026-08-24"]);
   });
 
-  it("keeps already-known dates when there is nothing to announce", () => {
-    expect(datesToRemember(["2026-08-23"], [], false)).toEqual(["2026-08-23"]);
+  it("returns nothing for no slots", () => {
+    expect(datesOfSlots([])).toEqual([]);
+  });
+});
+
+describe("slotsToRemember", () => {
+  it("records everything once the notification went out", () => {
+    expect(
+      slotsToRemember(
+        ["2026-08-23 20:00", "2026-08-23 21:00"],
+        ["2026-08-23 20:00"],
+        true
+      )
+    ).toEqual(["2026-08-23 20:00", "2026-08-23 21:00"]);
   });
 
-  it("leaves out dates whose push failed, so the next tick retries", () => {
-    // Without this the date would count as old news forever and the opening
-    // would never be announced.
+  it("keeps already-known slots when there is nothing to announce", () => {
+    expect(slotsToRemember(["2026-08-23 21:00"], [], false)).toEqual([
+      "2026-08-23 21:00",
+    ]);
+  });
+
+  it("leaves out slots whose push failed, so the next tick retries", () => {
     expect(
-      datesToRemember(["2026-08-23", "2026-08-24"], ["2026-08-24"], false)
-    ).toEqual(["2026-08-23"]);
+      slotsToRemember(
+        ["2026-08-23 20:00", "2026-08-23 21:00"],
+        ["2026-08-23 20:00"],
+        false
+      )
+    ).toEqual(["2026-08-23 21:00"]);
   });
 
   it("records nothing new when every announcement failed", () => {
     expect(
-      datesToRemember(["2026-08-24"], ["2026-08-24"], false)
+      slotsToRemember(["2026-08-23 20:00"], ["2026-08-23 20:00"], false)
     ).toEqual([]);
+  });
+});
+
+describe("notification decision", () => {
+  /** Mirrors the scheduler: anything not already known is announced. */
+  const newlyOpen = (known: string[], now: string[]) =>
+    now.filter((key) => !new Set(known).has(key));
+
+  it("announces a new time on a day that already had an opening", () => {
+    // The reported bug: 8/23 21:00 had been open all day, so when 20:00 freed
+    // up the per-date state said "already notified" and nothing was sent.
+    expect(
+      newlyOpen(
+        ["2026-08-23 21:00"],
+        ["2026-08-23 20:00", "2026-08-23 21:00"]
+      )
+    ).toEqual(["2026-08-23 20:00"]);
+  });
+
+  it("stays quiet while the same slots remain open", () => {
+    expect(
+      newlyOpen(["2026-08-23 21:00"], ["2026-08-23 21:00"])
+    ).toEqual([]);
+  });
+
+  it("announces again after a slot closes and reopens", () => {
+    expect(newlyOpen([], ["2026-08-23 20:00"])).toEqual(["2026-08-23 20:00"]);
+  });
+
+  it("treats every open slot as new when the state predates slot tracking", () => {
+    expect(
+      newlyOpen([], ["2026-08-23 20:00", "2026-08-23 21:00"])
+    ).toEqual(["2026-08-23 20:00", "2026-08-23 21:00"]);
   });
 });

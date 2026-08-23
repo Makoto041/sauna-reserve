@@ -219,7 +219,7 @@ describe("statusMessage", () => {
     intervalMinutes: 5,
     nightPause: true,
     targetDates: ["2026-08-23", "2026-08-24"],
-    availableDates: ["2026-08-23"],
+    availableSlots: ["2026-08-23 21:00"],
     checkedAtText: "8/22 18:30",
     lastNotifiedAtText: "8/22 10:15",
   };
@@ -232,11 +232,34 @@ describe("statusMessage", () => {
     expectValidMessage(message);
   });
 
-  it("shows which monitored dates currently have availability", () => {
-    const rendered = JSON.stringify(statusMessage(base));
+  it("shows the open times per monitored date", () => {
+    const rendered = JSON.stringify(
+      statusMessage({
+        ...base,
+        targetDates: ["2026-08-23", "2026-08-24"],
+        availableSlots: ["2026-08-23 20:00", "2026-08-23 21:00"],
+      })
+    );
     expect(rendered).toContain("8/23(日)");
-    expect(rendered).toContain("空きあり");
+    expect(rendered).toContain("20:00 21:00");
     expect(rendered).toContain("空きなし");
+  });
+
+  it("collapses a long list of times", () => {
+    const rendered = JSON.stringify(
+      statusMessage({
+        ...base,
+        targetDates: ["2026-08-23"],
+        availableSlots: [
+          "2026-08-23 12:00",
+          "2026-08-23 13:00",
+          "2026-08-23 14:00",
+          "2026-08-23 15:00",
+          "2026-08-23 16:00",
+        ],
+      })
+    );
+    expect(rendered).toContain("12:00 13:00 14:00 +2");
   });
 
   it("offers start when stopped and stop when running", () => {

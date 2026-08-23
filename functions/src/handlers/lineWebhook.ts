@@ -117,9 +117,9 @@ async function execute(
 
     case "register": {
       await setLineTarget(userId);
-      await ensureWatchConfig();
+      const config = await ensureWatchConfig();
       logger.info("User registered", { userId });
-      return [welcomeMessage(today)];
+      return [welcomeMessage(config.enabled, today)];
     }
 
     case "start": {

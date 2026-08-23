@@ -10,8 +10,10 @@
  * Usage:
  *   LINE_CHANNEL_ACCESS_TOKEN=... node scripts/richmenu/setup.mjs [--keep-old]
  *
- * Run it again after changing the image or the tile actions; existing rich
- * menus are removed first unless --keep-old is passed.
+ * Run it again after changing the image or the tile actions. The new menu is
+ * created and linked before the old ones are removed, so the channel is never
+ * left without a rich menu. Pass --keep-old to leave the previous menus in
+ * place instead of deleting them.
  */
 
 import { readFile } from "node:fs/promises";
@@ -102,15 +104,13 @@ if (!token) {
 
 const keepOld = process.argv.includes("--keep-old");
 
-if (!keepOld) {
-  const { richmenus = [] } = await call(API, "/richmenu/list", {
-    method: "GET",
-  });
-  for (const menu of richmenus) {
-    await call(API, `/richmenu/${menu.richMenuId}`, { method: "DELETE" });
-    console.log(`deleted old rich menu ${menu.richMenuId} (${menu.name})`);
-  }
-}
+// Note the menus to retire before creating the replacement, but delete them
+// only once the new one is live. Deleting first would leave the channel with
+// no rich menu at all if any later step failed - and the rich menu is the only
+// entry point that needs no typing.
+const { richmenus: existing = [] } = await call(API, "/richmenu/list", {
+  method: "GET",
+});
 
 const { richMenuId } = await call(API, "/richmenu", {
   body: JSON.stringify(MENU),
@@ -126,3 +126,13 @@ console.log("uploaded image");
 
 await call(API, `/user/all/richmenu/${richMenuId}`);
 console.log("set as the default rich menu for all users");
+
+if (!keepOld) {
+  for (const menu of existing) {
+    if (menu.richMenuId === richMenuId) {
+      continue;
+    }
+    await call(API, `/richmenu/${menu.richMenuId}`, { method: "DELETE" });
+    console.log(`deleted old rich menu ${menu.richMenuId} (${menu.name})`);
+  }
+}

@@ -336,7 +336,7 @@ describe("monitoringStoppedMessage", () => {
 });
 
 describe("welcomeMessage", () => {
-  const message = welcomeMessage(TODAY);
+  const message = welcomeMessage(false, TODAY);
 
   it("walks a first-time user through the three steps in order", () => {
     const rendered = JSON.stringify(message);
@@ -360,6 +360,19 @@ describe("welcomeMessage", () => {
   it("says what the bot does in the altText, for the notification preview", () => {
     expect(message.altText).toContain("空き");
     expectValidMessage(message);
+  });
+
+  it("reflects that monitoring is already running", () => {
+    // 「登録」 is also how the notification target is taken over, so this card
+    // can appear while monitoring is on. Offering 開始 would misstate the state
+    // and drop the one-tap way to stop.
+    const running = welcomeMessage(true, TODAY);
+    const labels = (running.quickReply?.items ?? []).map((item) =>
+      labelOf(item.action)
+    );
+    expect(labels).toContain("⏸ 停止");
+    expect(labels).not.toContain("▶️ 開始");
+    expectValidMessage(running);
   });
 });
 

@@ -685,8 +685,15 @@ const STEPS: Array<[string, string, string]> = [
 /**
  * Builds the first message a new user sees. Everything they need to get going
  * is on this one card, in order, with the first action as a button.
+ *
+ * @param enabled - Current monitoring state. `登録` is also the documented way
+ *   to take over the notification target, so this card can be shown while
+ *   monitoring is already running.
  */
-export function welcomeMessage(today: string = todayJST()): LineFlexMessage {
+export function welcomeMessage(
+  enabled: boolean,
+  today: string = todayJST()
+): LineFlexMessage {
   return {
     type: "flex",
     altText: "【はじめかた】日付を選んで「監視開始」を押すと、空きが出たときにお知らせします",
@@ -741,7 +748,7 @@ export function welcomeMessage(today: string = todayJST()): LineFlexMessage {
         ],
       },
     },
-    quickReply: mainQuickReply(false, today),
+    quickReply: mainQuickReply(enabled, today),
   };
 }
 

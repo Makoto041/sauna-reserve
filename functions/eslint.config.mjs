@@ -1,5 +1,6 @@
 // @ts-check
 import js from "@eslint/js";
+import globals from "globals";
 import tseslint from "typescript-eslint";
 
 export default tseslint.config(
@@ -10,19 +11,13 @@ export default tseslint.config(
     languageOptions: {
       ecmaVersion: 2022,
       sourceType: "module",
-      globals: {
-        // Node 22 globals the Functions runtime provides.
-        process: "readonly",
-        Buffer: "readonly",
-        console: "readonly",
-        fetch: "readonly",
-        AbortSignal: "readonly",
-        URLSearchParams: "readonly",
-        URL: "readonly",
-      },
+      // Only reaches .mjs/.js here: tseslint's recommended preset turns
+      // no-undef off for TypeScript, where the compiler already checks it.
+      globals: globals.node,
     },
     rules: {
-      // The handlers log unknown errors; narrowing every one adds noise.
+      // `any` erases the type checking the rest of the codebase relies on;
+      // unknown plus a narrowing check is the pattern used in the handlers.
       "@typescript-eslint/no-explicit-any": "error",
       "@typescript-eslint/no-unused-vars": [
         "error",

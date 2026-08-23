@@ -175,9 +175,24 @@ export const watchScheduler = onSchedule(
         ...previouslyAvailable.filter((date) => unresolved.includes(date)),
       ].sort();
 
-      const newlyAvailable = availableNow.filter(
-        (date) => !previouslyAvailable.includes(date)
-      );
+      // Schema migration: state written by the previous version has no
+      // availableDates, only a global `has`. When that said availability was
+      // present the user has already been notified about it, so seed the
+      // per-date state on this first run instead of announcing it again.
+      const legacyAlreadyNotified =
+        previousState !== null &&
+        previousState.availableDates === undefined &&
+        previousState.has === true;
+
+      const newlyAvailable = legacyAlreadyNotified
+        ? []
+        : availableNow.filter((date) => !previouslyAvailable.includes(date));
+
+      if (legacyAlreadyNotified) {
+        logger.info("Seeding per-date state from legacy state document", {
+          availableNow,
+        });
+      }
 
       logger.info("Availability check result", {
         checkedDates: targetDates.length || "current-week",

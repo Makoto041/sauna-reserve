@@ -42,10 +42,8 @@ npm install -g firebase-tools
 # ログイン
 firebase login
 
-# プロジェクト作成（または既存を使用）
-firebase projects:create your-project-id
-
-# プロジェクトを選択
+# プロジェクトを選択（.firebaserc で sauna-reserve に固定済み。
+# 別プロジェクトを使う場合のみ）
 firebase use your-project-id
 ```
 

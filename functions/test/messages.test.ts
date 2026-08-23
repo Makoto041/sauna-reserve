@@ -14,6 +14,7 @@ import {
   encodePostback,
   helpMessage,
   mainQuickReply,
+  monitoringStoppedMessage,
   statusMessage,
   textReply,
 } from "../src/lib/messages.js";
@@ -295,6 +296,39 @@ describe("deletePickerMessage", () => {
       (_, index) => `2026-09-${String(index + 1).padStart(2, "0")}`
     );
     expect(JSON.stringify(deletePickerMessage(dates))).toContain("ほか 4 件");
+  });
+});
+
+describe("monitoringStoppedMessage", () => {
+  it("names the dates that expired", () => {
+    const message = monitoringStoppedMessage(["2026-08-20", "2026-08-21"]);
+    const rendered = JSON.stringify(message);
+    expect(rendered).toContain("2026年8月20日(木)");
+    expect(rendered).toContain("2026年8月21日(金)");
+    expect(message.altText).toContain("停止");
+    expectValidMessage(message);
+  });
+
+  it("offers the date picker so a new date is one tap away", () => {
+    const message = monitoringStoppedMessage(["2026-08-20"]);
+    const actions = collectActions(message.contents);
+    expect(
+      actions.some((action) => action.type === "datetimepicker")
+    ).toBe(true);
+  });
+
+  it("collapses a long list of expired dates", () => {
+    const expired = Array.from(
+      { length: 14 },
+      (_, index) => `2026-08-${String(index + 1).padStart(2, "0")}`
+    );
+    const message = monitoringStoppedMessage(expired);
+    expect(JSON.stringify(message)).toContain("ほか 4 件");
+    expectValidMessage(message);
+  });
+
+  it("still renders when the expired list is empty", () => {
+    expectValidMessage(monitoringStoppedMessage([]));
   });
 });
 

@@ -21,6 +21,8 @@ import {
   getLineTarget,
   pushMessage,
   availabilityNotification,
+  monitoringStoppedMessage,
+  splitPastDates,
   DEFAULT_INTERVAL_MINUTES,
   jstHour,
   todayJST,
@@ -92,34 +94,44 @@ export const watchScheduler = onSchedule(
       // on the old checkedAt and fetch (and notify) twice.
       await touchWatchState();
 
-      // Step 4: someone has to receive the notification.
-      const target = await getLineTarget();
-      if (!target?.userId) {
-        logger.warn("No target user registered, skipping");
-        return;
-      }
-
       const accessToken = lineChannelAccessToken.value();
       const today = todayJST(startTime);
+      const target = await getLineTarget();
 
-      // Step 5: drop dates that have already passed.
+      // Step 4: drop dates that have already passed. When that leaves nothing
+      // to watch, stop monitoring rather than checking an empty schedule (or,
+      // worse, silently falling back to watching every date).
       const configuredDates = [...(config.targetDates ?? [])].sort();
-      let targetDates = configuredDates;
-      if (configuredDates.some((date) => date < today)) {
-        const pruned = await prunePastTargetDates(today);
-        targetDates = configuredDates.filter((date) => !pruned.includes(date));
-        logger.info("Pruned past target dates", { pruned });
+      const { future: targetDates, past: expired } = splitPastDates(
+        configuredDates,
+        today
+      );
 
-        if (targetDates.length === 0) {
-          await setWatchEnabled(false);
-          await updateWatchState([], false, previousState?.lastNotifiedAt);
+      if (expired.length > 0) {
+        await prunePastTargetDates(today);
+        logger.info("Pruned past target dates", { expired });
+      }
+
+      if (configuredDates.length > 0 && targetDates.length === 0) {
+        await setWatchEnabled(false);
+        await updateWatchState([], false, previousState?.lastNotifiedAt);
+        logger.info("All target dates expired, monitoring disabled", {
+          expired,
+        });
+        if (target?.userId) {
           await pushMessage(
             accessToken,
             target.userId,
-            "監視していた日付がすべて過去日になったため、監視を停止しました。\n新しい日付を追加して「開始」を押してください。"
+            monitoringStoppedMessage(expired)
           );
-          return;
         }
+        return;
+      }
+
+      // Step 5: someone has to receive the notification.
+      if (!target?.userId) {
+        logger.warn("No target user registered, skipping");
+        return;
       }
 
       // Step 6: check availability (one page fetch per 7-day window).

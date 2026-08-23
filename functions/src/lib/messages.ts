@@ -547,6 +547,90 @@ export function deletePickerMessage(targetDates: string[]): LineFlexMessage {
   };
 }
 
+/**
+ * Builds the push sent when every monitored date has passed and monitoring was
+ * switched off automatically. Leads with the date picker so the user can queue
+ * a new date in one tap.
+ *
+ * @param expired - The dates that were dropped
+ */
+export function monitoringStoppedMessage(expired: string[]): LineFlexMessage {
+  const shown = expired.slice(0, MAX_DATE_ROWS);
+  const body: FlexComponent[] = [
+    {
+      type: "text",
+      text: "監視していた日付がすべて過去になったため、監視を停止しました。",
+      size: "sm",
+      color: COLOR_TEXT,
+      wrap: true,
+    },
+  ];
+
+  if (shown.length > 0) {
+    body.push({
+      type: "text",
+      text: "終了した監視日",
+      size: "sm",
+      weight: "bold",
+      margin: "lg",
+    });
+    for (const date of shown) {
+      body.push({
+        type: "text",
+        text: formatLongJa(date),
+        size: "sm",
+        color: COLOR_MUTED,
+      });
+    }
+    if (expired.length > shown.length) {
+      body.push({
+        type: "text",
+        text: `ほか ${expired.length - shown.length} 件`,
+        size: "xs",
+        color: COLOR_MUTED,
+      });
+    }
+  }
+
+  return {
+    type: "flex",
+    altText: "【停止】監視日がすべて過去日になったため監視を停止しました",
+    contents: {
+      type: "bubble",
+      header: header("監視を停止しました", "サウナ空き監視", COLOR_OFF),
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "xs",
+        paddingAll: "16px",
+        contents: body,
+      },
+      footer: {
+        type: "box",
+        layout: "vertical",
+        spacing: "sm",
+        paddingAll: "12px",
+        contents: [
+          {
+            type: "button",
+            style: "primary",
+            height: "sm",
+            color: COLOR_ON,
+            action: datePickerAction("日付を追加"),
+          },
+          {
+            type: "button",
+            style: "link",
+            height: "sm",
+            action: postbackAction("状態を見る", { action: "status" }, "状態"),
+          },
+        ],
+      },
+    },
+    quickReply: mainQuickReply(false),
+  };
+}
+
 /* ------------------------------------------------------------------ *
  * Help
  * ------------------------------------------------------------------ */

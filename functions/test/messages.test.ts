@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import type {
   FlexComponent,
   FlexContainer,
@@ -373,5 +375,36 @@ describe("helpMessage", () => {
     expect(rendered.indexOf("使いはじめ")).toBeLessThan(
       rendered.indexOf("キーワードを送っても")
     );
+  });
+});
+
+describe("rich menu tiles", () => {
+  // The rich menu lives outside the Functions build (it is registered by a
+  // standalone script), so its postback strings are duplicated. Read them back
+  // from the script itself: a typo there is invisible until someone taps the
+  // tile and gets 「エラーが発生しました」.
+  const script = readFileSync(
+    fileURLToPath(new URL("../../scripts/richmenu/setup.mjs", import.meta.url)),
+    "utf8"
+  );
+  const dataStrings = [...script.matchAll(/data:\s*"([^"]+)"/g)].map(
+    (match) => match[1]
+  );
+
+  it("finds the tile actions in the script", () => {
+    expect(dataStrings.length).toBe(6);
+  });
+
+  it("every tile decodes to a command the webhook handles", () => {
+    for (const data of dataStrings) {
+      expect(decodePostback(data), `unhandled rich menu tile: ${data}`).not.toBeNull();
+    }
+  });
+
+  it("offers the actions a first-time user needs", () => {
+    const actions = dataStrings.map((data) => decodePostback(data)?.action);
+    expect(actions).toContain("add");
+    expect(actions).toContain("start");
+    expect(actions).toContain("help");
   });
 });

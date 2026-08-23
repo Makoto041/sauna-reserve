@@ -167,14 +167,15 @@ export async function getWatchState(): Promise<WatchStateDoc | null> {
 /**
  * Records the outcome of a check.
  *
- * Written with a full overwrite so stale dates never linger in the document.
+ * Written with a full overwrite, which also drops the per-date `availableDates`
+ * field written by older versions.
  *
- * @param availableDates - Dates that currently have availability
+ * @param availableSlots - Slot keys ("YYYY-MM-DD HH:MM") that are open now
  * @param notified - Whether a notification was sent this run
  * @param previousNotifiedAt - Existing lastNotifiedAt, preserved when not notifying
  */
 export async function updateWatchState(
-  availableDates: string[],
+  availableSlots: string[],
   notified: boolean,
   previousNotifiedAt?: number
 ): Promise<void> {
@@ -182,9 +183,9 @@ export async function updateWatchState(
   const now = Date.now();
   const lastNotifiedAt = notified ? now : previousNotifiedAt;
   const data: WatchStateDoc = {
-    has: availableDates.length > 0,
+    has: availableSlots.length > 0,
     checkedAt: now,
-    availableDates,
+    availableSlots,
     ...(lastNotifiedAt !== undefined ? { lastNotifiedAt } : {}),
   };
   await db.doc(WATCH_STATE_PATH).set(data);

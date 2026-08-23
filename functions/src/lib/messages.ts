@@ -17,6 +17,7 @@ import type {
 import type { Slot } from "./availability.js";
 import { getTargetUrl } from "./availability.js";
 import { addDays, formatLongJa, formatShortJa, todayJST } from "./datetime.js";
+import { dateOfSlotKey } from "./watch.js";
 
 const COLOR_ACCENT = "#D9480F";
 const COLOR_ON = "#2F9E44";
@@ -338,7 +339,8 @@ export interface StatusView {
   intervalMinutes: number;
   nightPause: boolean;
   targetDates: string[];
-  availableDates: string[];
+  /** Slot keys ("YYYY-MM-DD HH:MM") that are currently open. */
+  availableSlots: string[];
   checkedAt?: number;
   lastNotifiedAt?: number;
   /** Pre-formatted JST strings, so this builder stays pure and clock-free. */
@@ -346,7 +348,13 @@ export interface StatusView {
   lastNotifiedAtText?: string;
 }
 
-function dateRow(date: string, available: boolean): FlexBox {
+/** Times shown next to a monitored date before collapsing into "+N". */
+const MAX_TIMES_PER_ROW = 3;
+
+function dateRow(date: string, times: string[]): FlexBox {
+  const shown = times.slice(0, MAX_TIMES_PER_ROW).join(" ");
+  const extra = times.length - Math.min(times.length, MAX_TIMES_PER_ROW);
+
   return {
     type: "box",
     layout: "baseline",
@@ -360,11 +368,17 @@ function dateRow(date: string, available: boolean): FlexBox {
       },
       {
         type: "text",
-        text: available ? "空きあり" : "空きなし",
+        text:
+          times.length === 0
+            ? "空きなし"
+            : extra > 0
+              ? `${shown} +${extra}`
+              : shown,
         size: "sm",
-        color: available ? COLOR_ACCENT : COLOR_MUTED,
+        color: times.length > 0 ? COLOR_ACCENT : COLOR_MUTED,
         align: "end",
-        flex: 3,
+        flex: 5,
+        wrap: true,
       },
     ],
   };
@@ -408,7 +422,14 @@ export function statusMessage(view: StatusView): LineFlexMessage {
     });
     const shown = view.targetDates.slice(0, MAX_DATE_ROWS);
     for (const date of shown) {
-      body.push(dateRow(date, view.availableDates.includes(date)));
+      body.push(
+        dateRow(
+          date,
+          view.availableSlots
+            .filter((key) => dateOfSlotKey(key) === date)
+            .map((key) => key.slice(11))
+        )
+      );
     }
     if (view.targetDates.length > shown.length) {
       body.push({
